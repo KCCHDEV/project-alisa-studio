@@ -1,6 +1,7 @@
 import { app, BrowserWindow, shell, ipcMain, TouchBar } from 'electron';
 import * as path from 'path';
 import * as http from 'http';
+import * as fs from 'fs';
 import { fork, ChildProcess } from 'child_process';
 
 const { TouchBarButton, TouchBarSpacer, TouchBarLabel } = TouchBar;
@@ -69,9 +70,19 @@ function setupTouchBar(window: BrowserWindow) {
 
 function startBackendServer() {
   const isDev = !app.isPackaged;
-  const serverScript = isDev
-    ? path.join(__dirname, 'server.cjs')
-    : path.join(process.resourcesPath, 'dist-electron', 'server.cjs');
+  const serverCandidates = isDev
+    ? [
+        path.join(__dirname, 'server.cjs'),
+        path.join(__dirname, '..', '..', 'dist-electron', 'server.cjs'),
+        path.join(process.cwd(), 'dist-electron', 'server.cjs'),
+      ]
+    : [path.join(process.resourcesPath, 'dist-electron', 'server.cjs')];
+  const serverScript = serverCandidates.find((candidate) => fs.existsSync(candidate)) || serverCandidates[0];
+
+  if (!fs.existsSync(serverScript)) {
+    console.error(`[Electron] Backend server script not found. Checked: ${serverCandidates.join(', ')}`);
+    return;
+  }
 
   try {
     serverProcess = fork(serverScript, [], {
