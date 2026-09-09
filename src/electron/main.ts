@@ -1,0 +1,214 @@
+import { app, BrowserWindow, shell, ipcMain, TouchBar } from 'electron';
+import * as path from 'path';
+import * as http from 'http';
+import { fork, ChildProcess } from 'child_process';
+
+const { TouchBarButton, TouchBarSpacer, TouchBarLabel } = TouchBar;
+
+let mainWindow: BrowserWindow | null = null;
+let serverProcess: ChildProcess | null = null;
+let touchBarStatusLabel: any = null;
+let persistentTouchBar: any = null;
+const SERVER_PORT = 3001;
+
+function setupTouchBar(window: BrowserWindow) {
+  if (process.platform !== 'darwin') return;
+
+  if (!persistentTouchBar) {
+    const newChatBtn = new TouchBarButton({
+      label: '+ New Chat',
+      backgroundColor: '#2b2b2b',
+      click: () => {
+        window.webContents.send('touchbar-new-chat');
+      },
+    });
+
+    const newProjectBtn = new TouchBarButton({
+      label: '📂 Project',
+      backgroundColor: '#1c1c1c',
+      click: () => {
+        window.webContents.send('touchbar-new-project');
+      },
+    });
+
+    const cmdPaletteBtn = new TouchBarButton({
+      label: '⌘ Cmds',
+      backgroundColor: '#1f1f1f',
+      click: () => {
+        window.webContents.send('touchbar-command-palette');
+      },
+    });
+
+    const rollbackBtn = new TouchBarButton({
+      label: '⏪ Rollback',
+      backgroundColor: '#3a1a1a',
+      click: () => {
+        window.webContents.send('touchbar-rollback');
+      },
+    });
+
+    touchBarStatusLabel = new TouchBarLabel({
+      label: '🍓 Alisa: Ready',
+      textColor: '#27c93f',
+    });
+
+    persistentTouchBar = new TouchBar({
+      items: [
+        touchBarStatusLabel,
+        new TouchBarSpacer({ size: 'small' }),
+        newChatBtn,
+        newProjectBtn,
+        cmdPaletteBtn,
+        rollbackBtn,
+      ],
+    });
+  }
+
+  window.setTouchBar(persistentTouchBar);
+}
+
+function startBackendServer() {
+  const isDev = !app.isPackaged;
+  const serverScript = isDev
+    ? path.join(__dirname, 'server.cjs')
+    : path.join(process.resourcesPath, 'dist-electron', 'server.cjs');
+
+  try {
+    serverProcess = fork(serverScript, [], {
+      env: { ...process.env, PORT: String(SERVER_PORT) },
+      stdio: 'inherit',
+    });
+
+    serverProcess.on('error', (err) => {
+      console.error('[Electron] Failed to start backend server:', err);
+    });
+
+    serverProcess.on('exit', (code) => {
+      console.log(`[Electron] Backend server exited with code ${code}`);
+    });
+  } catch (err) {
+    console.error('[Electron] Server start exception:', err);
+  }
+}
+
+function createWindow() {
+  const isMac = process.platform === 'darwin';
+
+  mainWindow = new BrowserWindow({
+    width: 1300,
+    height: 850,
+    minWidth: 960,
+    minHeight: 640,
+    frame: !isMac ? false : false, // Frameless custom window header bar
+    titleBarStyle: isMac ? 'hiddenInset' : undefined,
+    trafficLightPosition: isMac ? { x: 14, y: 12 } : undefined,
+    title: 'Project Alisa — AI Coding & Automation Studio',
+    icon: path.join(__dirname, '../public/avatar.png'),
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.cjs'),
+      webSecurity: false,
+    },
+    backgroundColor: '#121212',
+    show: false,
+  });
+
+  mainWindow.once('ready-to-show', () => {
+    mainWindow?.show();
+    if (mainWindow) {
+      setupTouchBar(mainWindow);
+    }
+  });
+
+  mainWindow.on('focus', () => {
+    if (mainWindow) {
+      setupTouchBar(mainWindow);
+    }
+  });
+
+  mainWindow.on('show', () => {
+    if (mainWindow) {
+      setupTouchBar(mainWindow);
+    }
+  });
+
+  const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
+
+  if (isDev && process.env.VITE_DEV_SERVER_URL) {
+    mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
+  } else {
+    // Retry loading http://localhost:3001 served by backend server
+    const targetUrl = `http://localhost:${SERVER_PORT}`;
+    const tryLoad = () => {
+      http.get(targetUrl, () => {
+        mainWindow?.loadURL(targetUrl);
+      }).on('error', () => {
+        setTimeout(tryLoad, 300);
+      });
+    };
+    tryLoad();
+  }
+
+  mainWindow.webContents.setWindowOpenHandler((details) => {
+    shell.openExternal(details.url);
+    return { action: 'deny' };
+  });
+}
+
+// Window Control IPC Handlers
+ipcMain.on('update-touchbar-status', (_event, data: { text?: string; color?: string; status?: string }) => {
+  if (touchBarStatusLabel) {
+    if (data.text) {
+      touchBarStatusLabel.label = data.text;
+    } else if (data.status === 'acting' || data.status === 'thinking') {
+      touchBarStatusLabel.label = '⚡ Thinking...';
+      touchBarStatusLabel.textColor = '#ffaa00';
+    } else if (data.status === 'executing' || data.status === 'running') {
+      touchBarStatusLabel.label = '⚙️ Executing...';
+      touchBarStatusLabel.textColor = '#38bdf8';
+    } else {
+      touchBarStatusLabel.label = '🍓 Alisa: Ready';
+      touchBarStatusLabel.textColor = '#27c93f';
+    }
+    if (data.color) {
+      touchBarStatusLabel.textColor = data.color;
+    }
+  }
+});
+
+ipcMain.on('window-minimize', () => {
+  mainWindow?.minimize();
+});
+
+ipcMain.on('window-maximize', () => {
+  if (mainWindow?.isMaximized()) {
+    mainWindow.unmaximize();
+  } else {
+    mainWindow?.maximize();
+  }
+});
+
+ipcMain.on('window-close', () => {
+  mainWindow?.close();
+});
+
+app.whenReady().then(() => {
+  startBackendServer();
+  createWindow();
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+    }
+  });
+});
+
+app.on('window-all-closed', () => {
+  if (serverProcess) {
+    serverProcess.kill();
+  }
+  if (process.platform !== 'darwin') {
+    app.quit();
+  }
+});

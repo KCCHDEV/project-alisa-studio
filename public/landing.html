@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Project Alisa Studio — Autonomous AI Coding Harness</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+            mono: ['"Fira Code"', 'monospace'],
+          },
+          colors: {
+            alisa: {
+              bg: '#0c0c0e',
+              surface: '#141417',
+              card: '#19191e',
+              border: '#26262c',
+              accent: '#27c93f',
+              berry: '#ff3366',
+              amber: '#ffaa00',
+              cyan: '#38bdf8',
+              text: '#e2e2e8',
+              muted: '#8e8e9c'
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      background-color: #0c0c0e;
+      color: #e2e2e8;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+    .glow-accent {
+      box-shadow: 0 0 50px -10px rgba(39, 201, 63, 0.15);
+    }
+    .glow-berry {
+      box-shadow: 0 0 50px -10px rgba(255, 51, 102, 0.18);
+    }
+    .grid-bg {
+      background-size: 32px 32px;
+      background-image: 
+        linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+    }
+    .glass {
+      background: rgba(20, 20, 23, 0.85);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+    }
+  </style>
+</head>
+<body class="min-h-screen grid-bg text-alisa-text selection:bg-alisa-accent selection:text-black">
+
+  <!-- Navigation Bar -->
+  <header class="sticky top-0 z-50 glass border-b border-alisa-border/80">
+    <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-alisa-berry to-alisa-accent flex items-center justify-center font-bold text-black font-mono shadow-md">
+          🍓
+        </div>
+        <div class="flex flex-col">
+          <span class="font-bold text-base tracking-wider text-white font-mono uppercase leading-tight">
+            PROJECT ALISA <span class="text-xs text-alisa-accent font-normal">STUDIO</span>
+          </span>
+          <span class="text-[10px] text-alisa-muted tracking-tight">Autonomous AI Coding Harness</span>
+        </div>
+      </div>
+
+      <nav class="hidden md:flex items-center gap-8 text-sm font-medium text-alisa-muted">
+        <a href="#features" class="hover:text-white transition-colors">Features</a>
+        <a href="#usecases" class="hover:text-white transition-colors">Use Cases</a>
+        <a href="#touchbar" class="hover:text-white transition-colors">Touch Bar Simulator</a>
+        <a href="#roadmap" class="hover:text-white transition-colors">Roadmap</a>
+        <a href="#github" class="hover:text-white transition-colors">GitHub</a>
+      </nav>
+
+      <div class="flex items-center gap-3">
+        <a href="https://github.com" target="_blank" class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-alisa-surface border border-alisa-border text-xs font-mono text-gray-300 hover:text-white transition-colors">
+          <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
+          <span>Star on GitHub</span>
+        </a>
+        <a href="#download" class="px-4 py-2 rounded-lg bg-alisa-accent text-black font-bold text-xs hover:opacity-90 transition-all shadow-sm flex items-center gap-2">
+          <span>Download App</span>
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <section class="relative pt-20 pb-20 overflow-hidden">
+    <div class="max-w-7xl mx-auto px-6 text-center">
+      
+      <!-- Badges -->
+      <div class="inline-flex flex-wrap items-center justify-center gap-2 px-4 py-1.5 rounded-full bg-alisa-card border border-alisa-border mb-8 shadow-sm text-xs">
+        <span class="text-alisa-accent font-bold">Release v1.1.0</span>
+        <span class="text-alisa-border">•</span>
+        <span class="text-alisa-cyan font-mono">AST Security Gatekeeper</span>
+        <span class="text-alisa-border">•</span>
+        <span class="text-alisa-berry font-mono">MacBook Touch Bar Sync</span>
+      </div>
+
+      <!-- Main Headline -->
+      <h1 class="text-4xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight text-white max-w-5xl mx-auto leading-[1.15]">
+        Autonomous AI Coding <br class="hidden sm:inline">
+        <span class="bg-clip-text text-transparent bg-gradient-to-r from-emerald-400 via-teal-300 to-rose-400">
+          Engineered for Senior Builders.
+        </span>
+      </h1>
+
+      <p class="mt-6 text-lg sm:text-xl text-alisa-muted max-w-3xl mx-auto leading-relaxed font-light">
+        A bespoke high-contrast Obsidian Dark Studio powered by OmniRoute Multi-Model Gateway, AST syntax verification, 1-click code rollback, and native Touch Bar telemetry.
+      </p>
+
+      <!-- CTA Hub -->
+      <div class="mt-10 flex flex-wrap items-center justify-center gap-4">
+        <a href="#download" class="px-7 py-3.5 rounded-xl bg-alisa-accent text-black font-bold text-sm hover:opacity-90 transition-all shadow-lg flex items-center gap-3">
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.551H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-13.051-1.951"/></svg>
+          <span>Download Setup (.exe)</span>
+        </a>
+        <a href="#download" class="px-7 py-3.5 rounded-xl bg-alisa-surface border border-alisa-border text-white font-semibold text-sm hover:bg-alisa-card transition-all flex items-center gap-3">
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M15.97 6.37c.62-.75 1.04-1.8 0.92-2.85-.9.04-2 .6-2.64 1.35-.57.65-1.06 1.73-.93 2.76 1.01.08 2.03-.51 2.65-1.26z"/></svg>
+          <span>Download macOS (.dmg)</span>
+        </a>
+      </div>
+
+      <!-- Live Terminal Install Snippet -->
+      <div class="mt-8 max-w-xl mx-auto flex items-center justify-between p-3 rounded-xl bg-black/60 border border-alisa-border font-mono text-xs text-gray-300">
+        <div class="flex items-center gap-2 overflow-x-auto">
+          <span class="text-alisa-accent">$</span>
+          <span>git clone https://github.com/project-alisa/studio.git</span>
+        </div>
+        <button onclick="navigator.clipboard.writeText('git clone https://github.com/project-alisa/studio.git'); alert('Copied to clipboard!')" class="ml-3 px-2.5 py-1 rounded bg-alisa-card hover:bg-[#252530] text-gray-400 hover:text-white transition-colors shrink-0 text-[11px]">
+          Copy
+        </button>
+      </div>
+
+      <!-- App Mockup Interactive Playground -->
+      <div class="mt-14 max-w-6xl mx-auto rounded-2xl border border-alisa-border bg-alisa-surface shadow-2xl overflow-hidden text-left glow-accent">
+        <!-- Window Chrome -->
+        <div class="h-10 bg-[#111114] border-b border-alisa-border px-4 flex items-center justify-between font-mono text-xs text-alisa-muted">
+          <div class="flex items-center gap-2">
+            <div class="w-3 h-3 rounded-full bg-[#ff5f56]"></div>
+            <div class="w-3 h-3 rounded-full bg-[#ffbd2e]"></div>
+            <div class="w-3 h-3 rounded-full bg-[#27c93f]"></div>
+            <span class="ml-3 font-bold text-white tracking-wider">PROJECT ALISA STUDIO</span>
+          </div>
+          <div class="flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-[#18181c] border border-alisa-border">
+            <span class="w-2 h-2 rounded-full bg-alisa-accent animate-pulse"></span>
+            <span class="text-alisa-accent font-semibold text-[11px]">🍓 Alisa: Ready</span>
+            <span class="text-alisa-muted text-[10px]">| OmniRoute auto/best-coding</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="px-2 py-0.5 rounded bg-[#202026] text-white text-[10px]">+ New Chat</span>
+            <span class="px-2 py-0.5 rounded bg-[#202026] text-white text-[10px]">📂 New Project</span>
+          </div>
+        </div>
+
+        <!-- IDE Interior Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-12 min-h-[460px] font-mono text-xs">
+          <!-- Left Explorer -->
+          <div class="md:col-span-3 border-r border-alisa-border/80 bg-[#121215] p-4 hidden md:block">
+            <div class="text-[11px] font-bold text-alisa-muted mb-3 flex items-center justify-between">
+              <span>EXPLORER</span>
+              <span class="text-[10px] text-alisa-accent font-normal">WORKSPACE</span>
+            </div>
+            <div class="space-y-1.5 text-gray-400 text-xs">
+              <div class="flex items-center gap-2 text-white font-semibold">📁 src</div>
+              <div class="pl-4 space-y-1 text-[11px]">
+                <div class="text-alisa-cyan">📄 server/index.ts</div>
+                <div class="text-white">📄 electron/main.ts</div>
+                <div class="text-alisa-amber">📄 web/App.tsx</div>
+              </div>
+              <div class="flex items-center gap-2 text-white">📁 .alisa-sessions</div>
+              <div class="pl-4 text-[10px] text-gray-500">project_workspace.json</div>
+              <div class="flex items-center gap-2 text-white">📁 .alisa-history</div>
+              <div class="pl-4 text-[10px] text-gray-500">ast_gatekeeper.log</div>
+            </div>
+
+            <div class="mt-8 pt-4 border-t border-alisa-border/60">
+              <div class="text-[10px] font-bold text-alisa-muted mb-2 uppercase">Core Skills Active (15)</div>
+              <div class="flex flex-wrap gap-1">
+                <span class="px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-800 text-[10px]">senior-coding</span>
+                <span class="px-1.5 py-0.5 rounded bg-blue-950/80 text-blue-300 border border-blue-800 text-[10px]">ast-gatekeeper</span>
+                <span class="px-1.5 py-0.5 rounded bg-rose-950/80 text-rose-300 border border-rose-800 text-[10px]">security-audit</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Center Chat -->
+          <div class="md:col-span-5 border-r border-alisa-border/80 p-5 bg-[#141418] flex flex-col justify-between">
+            <div class="space-y-4 overflow-y-auto">
+              <div class="bg-[#1c1c22] border border-alisa-border rounded-xl p-3.5 text-gray-200">
+                <div class="text-[10px] text-alisa-muted mb-1 font-sans font-semibold">👤 Developer (Hori)</div>
+                <div class="font-sans text-xs">Refactor our API routes to support project-isolated chat sessions and AST rollbacks.</div>
+              </div>
+
+              <div class="bg-[#16161b] border border-emerald-900/60 rounded-xl p-3.5 space-y-2">
+                <div class="flex items-center justify-between text-[10px]">
+                  <span class="text-alisa-accent font-bold">🍓 Alisa Agent (Ney)</span>
+                  <span class="text-alisa-muted">120ms • OmniRoute Gateway</span>
+                </div>
+                <div class="text-[11px] text-gray-300 font-sans leading-relaxed">
+                  Analyzing syntax trees via AST Gatekeeper... Zero destructive changes detected. Session history safely separated under <code class="text-emerald-400">.alisa-sessions/</code>.
+                </div>
+                <div class="p-2 rounded bg-black/40 border border-alisa-border font-mono text-[10px] text-emerald-400">
+                  ✓ Verified: AST Syntax Check Passed<br>
+                  ✓ Rollback Snapshot Staged: #rec_8f3a9d<br>
+                  ✓ Response Time: 45 tok/s (Streamed)
+                </div>
+              </div>
+            </div>
+
+            <div class="mt-4 pt-3 border-t border-alisa-border/60">
+              <div class="flex items-center gap-2 p-2 rounded-xl bg-[#0f0f12] border border-alisa-border">
+                <span class="text-alisa-accent text-xs">⚡</span>
+                <input type="text" disabled value="Task completed with 0 errors. Ready for next prompt." class="w-full bg-transparent text-gray-400 text-xs font-sans outline-none">
+                <span class="px-2 py-1 rounded bg-alisa-card text-gray-400 text-[10px]">⌘K</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Logs -->
+          <div class="md:col-span-4 p-4 bg-[#0d0d10] font-mono text-[11px] flex flex-col justify-between overflow-hidden">
+            <div class="space-y-1.5 text-gray-300">
+              <div class="text-[10px] text-alisa-muted border-b border-alisa-border/60 pb-2 mb-2 flex items-center justify-between">
+                <span>TERMINAL & AST TRACE</span>
+                <span class="text-alisa-accent">60 FPS REALTIME</span>
+              </div>
+              <div class="text-emerald-400">[12:00:01] 🚀 Alisa Studio Initialized.</div>
+              <div class="text-alisa-cyan">[12:00:02] 🔗 Connected OmniRoute: auto/best-coding</div>
+              <div class="text-alisa-amber">[12:00:03] 🛡️ AST Gatekeeper Active. Safe Mode ON.</div>
+              <div class="text-gray-400">[12:00:04] 📂 Workspace Loaded: 48 files indexed.</div>
+              <div class="text-emerald-400">[12:00:05] 🍓 Live MacBook Touch Bar Synchronized.</div>
+              <div class="text-purple-400">[12:00:06] ✨ Pre-installed 15 Skills Auto-Synced.</div>
+            </div>
+
+            <div class="mt-4 pt-2 border-t border-alisa-border/40 text-[10px] text-alisa-muted flex justify-between">
+              <span>Memory: 42MB</span>
+              <span class="text-alisa-accent">Status: 24/7 Persistent</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Interactive MacBook Touch Bar Simulator -->
+  <section id="touchbar" class="py-20 border-t border-alisa-border/60 bg-[#0a0a0c]">
+    <div class="max-w-6xl mx-auto px-6">
+      <div class="p-8 sm:p-12 rounded-3xl bg-gradient-to-b from-[#18181e] to-[#101014] border border-alisa-border glow-berry">
+        <div class="flex flex-col lg:flex-row items-center justify-between gap-8">
+          <div class="max-w-xl">
+            <span class="px-3 py-1 rounded-full bg-rose-950/80 border border-rose-800 text-rose-400 text-xs font-mono font-bold uppercase">
+              Interactive Simulator
+            </span>
+            <h2 class="text-3xl sm:text-4xl font-extrabold text-white mt-4 tracking-tight">
+              MacBook Touch Bar Live Controls
+            </h2>
+            <p class="mt-4 text-alisa-muted text-sm sm:text-base leading-relaxed font-light">
+              Click the buttons below on the virtual Touch Bar to see how real-time agent telemetry and instant rollback actions work on macOS hardware.
+            </p>
+          </div>
+
+          <!-- Virtual Interactive Touch Bar -->
+          <div class="w-full lg:w-auto flex flex-col items-center">
+            <div class="w-full max-w-md p-3 rounded-2xl bg-black border-2 border-gray-800 shadow-2xl">
+              <div class="text-[9px] font-mono text-gray-500 mb-2 px-2 flex justify-between items-center">
+                <span>MACBOOK PRO TOUCH BAR</span>
+                <span id="tb-mode" class="text-emerald-400">STATE: READY</span>
+              </div>
+              <div class="h-12 rounded-xl bg-[#151515] border border-gray-700 px-3 flex items-center justify-between font-mono text-[11px]">
+                <button id="tb-status-btn" onclick="toggleTouchBarState()" class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#222226] text-emerald-400 font-bold border border-emerald-900/80 hover:scale-105 transition-transform">
+                  <span id="tb-icon">🍓</span>
+                  <span id="tb-text">Alisa: Ready</span>
+                </button>
+                <div class="flex items-center gap-1.5">
+                  <button onclick="alert('Triggered: + New Chat Session')" class="px-2 py-1 rounded bg-[#2a2a2a] text-gray-300 text-[10px] hover:bg-[#353535] active:scale-95 transition-all">+ Chat</button>
+                  <button onclick="alert('Triggered: 📂 Switch Project Workspace')" class="px-2 py-1 rounded bg-[#2a2a2a] text-gray-300 text-[10px] hover:bg-[#353535] active:scale-95 transition-all">📂 Project</button>
+                  <button onclick="alert('Triggered: ⏪ Instant AST Rollback to Last Staged Snapshot')" class="px-2 py-1 rounded bg-[#3a1a1a] text-rose-300 text-[10px] hover:bg-[#4a2222] active:scale-95 transition-all">⏪ Rollback</button>
+                </div>
+              </div>
+            </div>
+            <span class="text-[11px] text-gray-500 mt-3 font-mono">Click status button above to cycle states</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Real-World Use Cases -->
+  <section id="usecases" class="py-24 border-t border-alisa-border/60 bg-alisa-surface/40">
+    <div class="max-w-7xl mx-auto px-6">
+      <div class="text-center max-w-3xl mx-auto mb-16">
+        <h2 class="text-xs font-mono font-bold tracking-widest text-alisa-accent uppercase mb-3">Engineered for Builders</h2>
+        <p class="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">Real-World Superpowers & Use Cases</p>
+        <p class="mt-4 text-alisa-muted text-base">From full-stack code authoring to impenetrable AST security and rollback resilience.</p>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div class="p-6 rounded-2xl bg-alisa-card border border-alisa-border hover:border-emerald-500/50 transition-all group">
+          <div class="w-10 h-10 rounded-xl bg-emerald-950/60 border border-emerald-800 text-emerald-400 flex items-center justify-center font-bold text-lg mb-5 group-hover:scale-110 transition-transform">
+            ⚡
+          </div>
+          <h3 class="text-lg font-bold text-white mb-2">Autonomous Full-Stack Engineering</h3>
+          <p class="text-sm text-alisa-muted leading-relaxed font-light">
+            Alisa autonomously navigates codebases, edits multiple files, runs terminal tests, and validates builds without requiring line-by-line micromanagement.
+          </p>
+        </div>
+
+        <div class="p-6 rounded-2xl bg-alisa-card border border-alisa-border hover:border-rose-500/50 transition-all group">
+          <div class="w-10 h-10 rounded-xl bg-rose-950/60 border border-rose-800 text-rose-400 flex items-center justify-center font-bold text-lg mb-5 group-hover:scale-110 transition-transform">
+            🛡️
+          </div>
+          <h3 class="text-lg font-bold text-white mb-2">AST Security Gatekeeper & Rollback</h3>
+          <p class="text-sm text-alisa-muted leading-relaxed font-light">
+            Every code patch is analyzed for destructive syntax anomalies and secret leaks. Instant 1-Click Rollback recovers previous file versions effortlessly.
+          </p>
+        </div>
+
+        <div class="p-6 rounded-2xl bg-alisa-card border border-alisa-border hover:border-blue-500/50 transition-all group">
+          <div class="w-10 h-10 rounded-xl bg-blue-950/60 border border-blue-800 text-blue-400 flex items-center justify-center font-bold text-lg mb-5 group-hover:scale-110 transition-transform">
+            📁
+          </div>
+          <h3 class="text-lg font-bold text-white mb-2">Project-Isolated Chat & Context</h3>
+          <p class="text-sm text-alisa-muted leading-relaxed font-light">
+            Switch between client projects seamlessly. Each workspace maintains its own isolated chat memory, terminal logs, and rollback checkpoints.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Download & GitHub Section -->
+  <section id="download" class="py-24 border-t border-alisa-border/60 bg-gradient-to-b from-[#0e0e12] to-[#08080a]">
+    <div class="max-w-5xl mx-auto px-6 text-center">
+      <h2 class="text-xs font-mono font-bold tracking-widest text-alisa-accent uppercase mb-3">Download Packages</h2>
+      <p class="text-3xl sm:text-5xl font-extrabold text-white tracking-tight">Get Project Alisa Studio</p>
+
+      <div class="mt-12 grid grid-cols-1 md:grid-cols-2 gap-6 text-left max-w-3xl mx-auto">
+        <!-- Windows Setup Card -->
+        <div class="p-8 rounded-2xl bg-alisa-card border border-alisa-border hover:border-emerald-500/60 transition-all flex flex-col justify-between">
+          <div>
+            <div class="flex items-center justify-between mb-4">
+              <span class="text-2xl font-bold text-white">Windows</span>
+              <span class="px-2.5 py-1 rounded-full bg-emerald-950 text-emerald-300 font-mono text-[10px] border border-emerald-800">NSIS Installer</span>
+            </div>
+            <p class="text-xs text-alisa-muted leading-relaxed">
+              Official Setup wizard with Start Menu shortcuts, custom install path, and auto-uninstaller.
+            </p>
+            <div class="mt-4 text-xs font-mono text-gray-400 bg-black/40 p-2.5 rounded-lg border border-alisa-border">
+              File: Project Alisa Setup.exe (121MB)
+            </div>
+          </div>
+          <div class="mt-6">
+            <a href="https://github.com/NAYGOLF/project-alisa-studio#build-and-package" class="w-full py-3 rounded-xl bg-alisa-accent text-black font-bold text-xs tracking-wide hover:opacity-90 transition-all flex items-center justify-center gap-2">
+              <span>View Build Instructions</span>
+            </a>
+          </div>
+        </div>
+
+        <!-- macOS Card -->
+        <div class="p-8 rounded-2xl bg-alisa-card border border-alisa-border hover:border-rose-500/60 transition-all flex flex-col justify-between">
+          <div>
+            <div class="flex items-center justify-between mb-4">
+              <span class="text-2xl font-bold text-white">macOS</span>
+              <span class="px-2.5 py-1 rounded-full bg-rose-950 text-rose-300 font-mono text-[10px] border border-rose-800">Universal .dmg</span>
+            </div>
+            <p class="text-xs text-alisa-muted leading-relaxed">
+              Apple Silicon & Intel DMG package with native Touch Bar hardware support.
+            </p>
+            <div class="mt-4 text-xs font-mono text-gray-400 bg-black/40 p-2.5 rounded-lg border border-alisa-border">
+              Build Command: bun run dist:mac
+            </div>
+          </div>
+          <div class="mt-6">
+            <a href="https://github.com" target="_blank" class="w-full py-3 rounded-xl bg-alisa-surface border border-alisa-border text-white font-bold text-xs tracking-wide hover:bg-[#222228] transition-all flex items-center justify-center gap-2">
+              <span>View GitHub Releases</span>
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="border-t border-alisa-border/80 bg-[#08080a] py-12 text-alisa-muted text-xs font-mono">
+    <div class="max-w-7xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-6">
+      <div class="flex items-center gap-2">
+        <div class="w-5 h-5 rounded bg-white text-black flex items-center justify-center font-bold text-[10px]">🍓</div>
+        <span class="text-white font-bold">Project Alisa Studio</span>
+        <span>• Created for Hori</span>
+      </div>
+      <div class="text-center sm:text-right text-[11px] text-gray-500">
+        Ichigo เป็นเพียง AI ที่อาจทำงานผิดได้ โปรดตรวจสอบคำตอบทุกครั้ง
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    let states = [
+      { text: "Alisa: Ready", icon: "🍓", color: "text-emerald-400", border: "border-emerald-900/80", mode: "STATE: READY" },
+      { text: "Thinking...", icon: "⚡", color: "text-amber-400", border: "border-amber-900/80", mode: "STATE: REASONING" },
+      { text: "Executing...", icon: "⚙️", color: "text-cyan-400", border: "border-cyan-900/80", mode: "STATE: RUNNING TOOL" }
+    ];
+    let currentStateIdx = 0;
+    function toggleTouchBarState() {
+      currentStateIdx = (currentStateIdx + 1) % states.length;
+      let s = states[currentStateIdx];
+      let btn = document.getElementById("tb-status-btn");
+      document.getElementById("tb-icon").innerText = s.icon;
+      document.getElementById("tb-text").innerText = s.text;
+      document.getElementById("tb-mode").innerText = s.mode;
+      btn.className = `flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#222226] ${s.color} font-bold border ${s.border} hover:scale-105 transition-transform`;
+    }
+  </script>
+</body>
+</html>

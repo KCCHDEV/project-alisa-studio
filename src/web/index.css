@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', 'Inter', 'Prompt', -apple-system, sans-serif;
+    background-color: #0e0e0e;
+    color: #e0e0e0;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  }
+}
+
+/* App Region Dragging for Custom Window Frame */
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Custom Minimalist Dark Scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: #121212;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #282828;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #404040;
+}
+
+/* Custom Code Diff Styling */
+.diff-add {
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.08);
+}
+
+.diff-remove {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.08);
+}

@@ -1,0 +1,51 @@
+name: Project Alisa CI & Release Builder
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    name: Build & Package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun Runtime
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build Web Studio & Electron Core
+        run: bun run build
+
+      - name: Build Windows Packages (.exe & NSIS)
+        if: matrix.os == 'windows-latest'
+        run: bun run dist:win
+
+      - name: Build macOS Packages (.dmg & .zip)
+        if: matrix.os == 'macos-latest'
+        run: bun run dist:mac
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.os }}
+          path: release/*
