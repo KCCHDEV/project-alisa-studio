@@ -101,6 +101,16 @@ if (fs.existsSync(CONFIG_FILE)) {
   } catch {}
 }
 
+function getPublicConfig(config: LLMConfig & { workspaceDir: string }) {
+  return {
+    baseURL: config.baseURL,
+    model: config.model,
+    workspaceDir: config.workspaceDir,
+    hasKey: Boolean(config.apiKey),
+    apiKeyMasked: config.apiKey ? `${config.apiKey.slice(0, 6)}...${config.apiKey.slice(-4)}` : '',
+  };
+}
+
 const llmClient = new LLMClient({
   apiKey: currentConfig.apiKey,
   baseURL: currentConfig.baseURL,
@@ -129,11 +139,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/config') {
     if (req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        ...currentConfig,
-        hasKey: !!currentConfig.apiKey,
-        apiKeyMasked: currentConfig.apiKey ? `${currentConfig.apiKey.slice(0, 6)}...${currentConfig.apiKey.slice(-4)}` : '',
-      }));
+      res.end(JSON.stringify(getPublicConfig(currentConfig)));
     } else if (req.method === 'POST') {
       let body = '';
       req.on('data', chunk => body += chunk);
@@ -143,7 +149,12 @@ const server = http.createServer(async (req, res) => {
           const nextConfig = { ...currentConfig };
           if (data.apiKey !== undefined) {
             if (typeof data.apiKey !== 'string') throw new Error('API key must be text');
-            nextConfig.apiKey = data.apiKey.trim();
+            const nextApiKey = data.apiKey.trim();
+            // An empty field keeps the stored key unless the client explicitly
+            // requests clearing it.
+            if (nextApiKey || data.clearApiKey === true) {
+              nextConfig.apiKey = nextApiKey;
+            }
           }
           if (data.baseURL !== undefined) {
             if (typeof data.baseURL !== 'string' || !data.baseURL.trim()) {
@@ -178,7 +189,7 @@ const server = http.createServer(async (req, res) => {
           currentAgent.setWorkspace(currentConfig.workspaceDir);
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ success: true, config: currentConfig }));
+          res.end(JSON.stringify({ success: true, config: getPublicConfig(currentConfig) }));
         } catch (err: any) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: err.message }));
