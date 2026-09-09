@@ -6,6 +6,7 @@ import { Agent } from '../core/agent.ts';
 import { LLMClient, type LLMConfig } from '../llm/client.ts';
 import type { Message, AgentEvent, SessionState } from '../core/types.ts';
 import { writeFileTool } from '../tools/file-ops.ts';
+import { terminalTool } from '../tools/terminal.ts';
 
 const PORT = Number(process.env.PORT || 3001);
 const RUNTIME_DIR = process.env.ALISA_CONFIG_DIR || process.cwd();
@@ -346,6 +347,56 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname === '/api/terminal' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', async () => {
+      try {
+        const data = JSON.parse(body);
+        if (typeof data.command !== 'string' || !data.command.trim()) {
+          throw new Error('Command must be a non-empty string');
+        }
+        const timeout = Number(data.timeout_s ?? 60);
+        if (!Number.isFinite(timeout) || timeout <= 0 || timeout > 300) {
+          throw new Error('Timeout must be between 1 and 300 seconds');
+        }
+
+        const requestedWorkdir = typeof data.workdir === 'string' && data.workdir.trim()
+          ? data.workdir.trim()
+          : currentConfig.workspaceDir;
+        const workdir = path.isAbsolute(requestedWorkdir)
+          ? path.resolve(requestedWorkdir)
+          : path.resolve(currentConfig.workspaceDir, requestedWorkdir);
+        if (!isPathInsideWorkspace(workdir, currentConfig.workspaceDir)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Command directory is outside the active workspace' }));
+          return;
+        }
+        if (!fs.existsSync(workdir) || !fs.statSync(workdir).isDirectory()) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Command directory not found' }));
+          return;
+        }
+
+        const result = await terminalTool.execute(
+          { command: data.command.trim(), timeout_s: timeout, workdir },
+          {
+            cwd: currentConfig.workspaceDir,
+            sessionId: 'terminal-ui',
+            env: {},
+            emitEvent: () => undefined,
+          },
+        );
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: result.exitCode === 0, ...result }));
+      } catch (err: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message || 'Unable to execute command' }));
+      }
+    });
+    return;
+  }
+
   // Auto-Update Engine Endpoint
   if (url.pathname === '/api/update/check' && req.method === 'GET') {
     ensurePreinstalledSkills();
@@ -541,7 +592,10 @@ wss.on('connection', (ws: WebSocket) => {
         if (!prompt) return;
 
         broadcast({ type: 'status_change', status: 'thinking', detail: 'Planning task' });
-        const updatedHistory = await currentAgent.runTask(prompt, sessionHistory);
+        const requestedSkills = Array.isArray(msg.skills)
+          ? msg.skills.filter((skill: unknown): skill is string => typeof skill === 'string')
+          : [];
+        const updatedHistory = await currentAgent.runTask(prompt, sessionHistory, requestedSkills);
         sessionHistory = updatedHistory;
         fs.writeFileSync(sessionFile, JSON.stringify(sessionHistory, null, 2), 'utf-8');
       } else if (msg.type === 'abort_task') {

@@ -1,5 +1,10 @@
 import type { Message } from './types.ts';
 
+export interface ActiveSkill {
+  name: string;
+  content?: string;
+}
+
 export class ContextManager {
   private systemPrompt: string;
   private maxContextTokens: number;
@@ -35,10 +40,24 @@ Always verify your changes and provide clear summaries of what was accomplished!
    * Prepare the messages array for the LLM, ensuring system prompt is at the top
    * and compacting old messages if token limits are approached.
    */
-  prepareMessages(history: Message[], workspaceSummary?: string): Message[] {
+  prepareMessages(history: Message[], workspaceSummary?: string, activeSkills: ActiveSkill[] = []): Message[] {
     let fullSystem = this.systemPrompt;
     if (workspaceSummary) {
       fullSystem += `\n\n## Workspace State:\n${workspaceSummary}`;
+    }
+    if (activeSkills.length > 0) {
+      const skillText = activeSkills
+        .filter((skill) => skill.name.trim())
+        .map((skill) => {
+          const content = skill.content?.trim();
+          return content
+            ? `### ${skill.name}\n${content.slice(0, 8000)}`
+            : `### ${skill.name}\nUse this selected skill's focus while completing the task.`;
+        })
+        .join('\n\n');
+      if (skillText) {
+        fullSystem += `\n\n## Active Skills\nApply these selected skill instructions for this task:\n${skillText}`;
+      }
     }
 
     const systemMsg: Message = {

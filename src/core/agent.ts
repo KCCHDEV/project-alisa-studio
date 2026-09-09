@@ -1,8 +1,10 @@
 import { ToolRegistry } from '../tools/registry.ts';
 import { LLMClient } from '../llm/client.ts';
-import { ContextManager } from './context.ts';
+import { ContextManager, type ActiveSkill } from './context.ts';
 import { ContextCompactor } from './compactor.ts';
 import type { Message, AgentEvent, AgentStatus, ToolCall, SessionState } from './types.ts';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export interface AgentOptions {
   cwd: string;
@@ -47,6 +49,35 @@ export class Agent {
     this.cwd = cwd;
   }
 
+  private loadActiveSkills(skillNames: string[]): ActiveSkill[] {
+    const names = Array.from(new Set(skillNames.filter((name): name is string => typeof name === 'string'))).slice(0, 20);
+    const userHome = process.env.USERPROFILE || process.env.HOME || process.cwd();
+    const roots = [
+      path.join(userHome, 'AppData', 'Local', 'hermes', 'skills'),
+      path.join(this.cwd, '.hermes', 'skills'),
+    ];
+    const builtInGuidance: Record<string, string> = {
+      'openclaude-code-standards': 'Prefer small, type-safe changes. Inspect before editing, handle errors explicitly, and verify the result.',
+      'subagent-orchestration': 'Break independent work into clear subtasks and report progress and verification points.',
+      'systematic-debugging': 'Reproduce the issue, trace the first bad value to its source, make one targeted fix, then verify it.',
+      'web-vulnerability-scanner': 'Check input validation, authorization, secret exposure, and unsafe browser or server boundaries.',
+      'test-driven-development': 'Define a focused failing behavior first, implement the smallest fix, and run the relevant test.',
+    };
+
+    return names.map((name) => {
+      const safeName = path.basename(name);
+      for (const root of roots) {
+        const candidate = path.join(root, safeName, 'SKILL.md');
+        try {
+          if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+            return { name: safeName, content: fs.readFileSync(candidate, 'utf-8') };
+          }
+        } catch {}
+      }
+      return { name: safeName, content: builtInGuidance[safeName] };
+    });
+  }
+
   emit(event: AgentEvent) {
     this.onEvent?.(event);
   }
@@ -60,7 +91,7 @@ export class Agent {
   /**
    * Run a complete ReAct task loop
    */
-  async runTask(userPrompt: string, history: Message[] = []): Promise<Message[]> {
+  async runTask(userPrompt: string, history: Message[] = [], skillNames: string[] = []): Promise<Message[]> {
     this.isAborted = false;
     this.currentAbortController = new AbortController();
 
@@ -92,7 +123,11 @@ export class Agent {
         });
       }
 
-      const preparedMessages = this.contextManager.prepareMessages(compResult.compacted);
+      const preparedMessages = this.contextManager.prepareMessages(
+        compResult.compacted,
+        undefined,
+        this.loadActiveSkills(skillNames),
+      );
       const openAITools = this.tools.toOpenAITools();
 
       let currentResponseContent = '';
