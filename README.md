@@ -9,6 +9,8 @@ Project Alisa Studio brings streaming AI chat, local file tools, terminal execut
 ## Features
 
 - **Streaming chat:** displays model responses, reasoning when supplied by the provider, tool activity, and agent status.
+- **Responsive studio UI:** the Explorer becomes a mobile drawer, views stay usable on small screens, and the composer includes clear send/stop states.
+- **In-app editor:** open a workspace file, make changes, and save them through the same snapshot-protected file workflow used by the agent.
 - **Agent workflow:** a bounded multi-step loop with context preparation, context compaction, and cancellation.
 - **Workspace tools:** read, write, patch, list, and search files; execute shell commands with timeouts.
 - **Project history:** server-side chat files keyed by workspace, plus support for legacy sessions.

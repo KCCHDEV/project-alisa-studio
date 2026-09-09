@@ -54,7 +54,11 @@ import {
   Search,
   ArrowRight,
   Bug,
-  ShieldAlert
+  ShieldAlert,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Save,
+  CircleDot
 } from 'lucide-react';
 
 interface FileNode {
@@ -130,10 +134,15 @@ export default function App() {
   // Workspace & Files
   const [workspaceDir, setWorkspaceDir] = useState('');
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
+  const [collapsedDirectories, setCollapsedDirectories] = useState<Set<string>>(new Set());
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState<string>('');
+  const [editorDraft, setEditorDraft] = useState<string>('');
+  const [isSavingFile, setIsSavingFile] = useState(false);
+  const [editorError, setEditorError] = useState<string | null>(null);
   const [isWorkspaceLoading, setIsWorkspaceLoading] = useState(true);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   
   // OpenClaude Skills System State
   const [skills, setSkills] = useState<SkillItem[]>([]);
@@ -295,6 +304,14 @@ export default function App() {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamingContent, activeToolTraces]);
+
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 768px)');
+    const syncSidebar = () => setIsSidebarOpen(media.matches);
+    syncSidebar();
+    media.addEventListener?.('change', syncSidebar);
+    return () => media.removeEventListener?.('change', syncSidebar);
+  }, []);
 
   // Keyboard shortcut listener for Ctrl+K (Command Palette)
   useEffect(() => {
@@ -520,8 +537,10 @@ export default function App() {
 
       const nextWorkspace = data.config.workspaceDir;
       setWorkspaceDir(nextWorkspace);
+      setCollapsedDirectories(new Set());
       setSelectedFile(null);
       setFileContent('');
+      setEditorDraft('');
       setShowWorkspacePicker(false);
       fetchWorkspaceFiles();
       fetchProjectSessions(nextWorkspace);
@@ -533,18 +552,57 @@ export default function App() {
 
   const handleFileClick = async (filePath: string) => {
     setSelectedFile(filePath);
+    setEditorError(null);
     setActiveTab('editor');
+    setIsSidebarOpen(false);
     try {
       const res = await fetch(`${API_BASE}/api/files/read?path=${encodeURIComponent(filePath)}`);
       if (!res.ok) throw new Error(`File request failed (${res.status})`);
       const data = await res.json();
       if (data.content !== undefined) {
         setFileContent(data.content);
+        setEditorDraft(data.content);
         addTerminalLog(`📄 Opened File: ${filePath}`);
       }
     } catch (err) {
       console.error('Failed reading file:', err);
+      setEditorError(err instanceof Error ? err.message : 'Unable to read file');
     }
+  };
+
+  const handleSaveFile = async () => {
+    if (!selectedFile || editorDraft === fileContent || isSavingFile) return;
+
+    setIsSavingFile(true);
+    setEditorError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/files/write`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: selectedFile, content: editorDraft }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || `File save failed (${res.status})`);
+      }
+      setFileContent(editorDraft);
+      addTerminalLog(`💾 Saved File: ${selectedFile}`);
+      fetchWorkspaceFiles();
+    } catch (err) {
+      console.error('Failed saving file:', err);
+      setEditorError(err instanceof Error ? err.message : 'Unable to save file');
+    } finally {
+      setIsSavingFile(false);
+    }
+  };
+
+  const handleAbortTask = () => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'abort_task' }));
+    }
+    setStatus('idle');
+    setStatusDetail('Cancelled');
+    addTerminalLog('⏹️ Task cancelled by user.');
   };
 
   const handleServerEvent = (data: any) => {
@@ -803,11 +861,22 @@ export default function App() {
       <div key={node.path} className="pl-3">
         {node.type === 'directory' ? (
           <div>
-            <div className="flex items-center gap-1.5 py-1 px-1.5 rounded hover:bg-[#1c1c1c] text-xs font-mono text-[#aaaaaa]">
-              <Folder className="w-3.5 h-3.5 text-[#777777] shrink-0" />
+            <button
+              type="button"
+              aria-expanded={!collapsedDirectories.has(node.path)}
+              onClick={() => setCollapsedDirectories((prev) => {
+                const next = new Set(prev);
+                if (next.has(node.path)) next.delete(node.path);
+                else next.add(node.path);
+                return next;
+              })}
+              className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-xs text-[#aeb7c5] transition hover:bg-[#1c222b]"
+            >
+              <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-[#718097] transition-transform ${collapsedDirectories.has(node.path) ? '' : 'rotate-90'}`} />
+              <Folder className="h-3.5 w-3.5 shrink-0 text-[#8192ac]" />
               <span className="truncate">{node.name}</span>
-            </div>
-            {node.children && renderFileTree(node.children)}
+            </button>
+            {node.children && !collapsedDirectories.has(node.path) && renderFileTree(node.children)}
           </div>
         ) : (
           <div
@@ -876,780 +945,67 @@ export default function App() {
     && !statusDetail.startsWith('Ready. Workspace:')
     ? statusDetail
     : '';
-
+  const workspaceLabel = workspaceDir.split(/[\\/]/).filter(Boolean).pop() || 'No workspace selected';
+  const isBusy = status === 'thinking' || status === 'acting' || status === 'waiting_approval' || status === 'self_correcting';
+  const editorDirty = Boolean(selectedFile) && editorDraft !== fileContent;
   return (
-    <div className="flex flex-col h-screen bg-[#0e0e0e] text-[#e0e0e0] font-sans overflow-hidden select-none">
-      {/* ── Custom Window Header Bar (Project Alisa Style) ── */}
-      <div className="h-9 bg-[#121212] border-b border-[#242424] px-3 flex items-center justify-between shrink-0 drag-region">
-        {/* Left Window Controls & Brand */}
-        <div className="flex items-center space-x-3 no-drag">
-          <div className="flex items-center space-x-1.5">
-            <div 
-              onClick={() => (window as any).electronAPI?.close()} 
-              className="w-3 h-3 rounded-full bg-[#ff5f56] border border-[#e0443e] cursor-pointer hover:opacity-80 flex items-center justify-center group" 
-              title="Close"
-            >
-              <X className="w-2 h-2 text-[#4a0000] opacity-0 group-hover:opacity-100" />
-            </div>
-            <div 
-              onClick={() => (window as any).electronAPI?.minimize()} 
-              className="w-3 h-3 rounded-full bg-[#ffbd2e] border border-[#dea123] cursor-pointer hover:opacity-80 flex items-center justify-center group" 
-              title="Minimize"
-            >
-              <Minus className="w-2 h-2 text-[#4a3000] opacity-0 group-hover:opacity-100" />
-            </div>
-            <div 
-              onClick={() => (window as any).electronAPI?.maximize()} 
-              className="w-3 h-3 rounded-full bg-[#27c93f] border border-[#1aab29] cursor-pointer hover:opacity-80 flex items-center justify-center group" 
-              title="Maximize"
-            >
-              <Maximize className="w-2 h-2 text-[#004a00] opacity-0 group-hover:opacity-100" />
-            </div>
-          </div>
-
-          <div className="h-4 w-px bg-[#262626]" />
-
-          <div className="flex items-center gap-2">
-            <div className="w-5 h-5 rounded bg-[#ffffff] text-[#0e0e0e] flex items-center justify-center font-bold text-[11px] font-mono shadow-sm">
-              A
-            </div>
-            <span className="font-bold text-xs tracking-wider text-[#ffffff] font-mono uppercase">
-              ALISA <span className="text-[10px] text-[#777777] font-normal">STUDIO</span>
-            </span>
-          </div>
+    <div className="flex h-screen min-h-0 flex-col bg-[#0b0d10] text-[#e7e9ee] font-sans">
+      <header className="flex h-14 shrink-0 items-center justify-between border-b border-[#252a33] bg-[#11141a] px-3 sm:px-5">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <button type="button" onClick={() => setIsSidebarOpen((open) => !open)} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-transparent text-[#aab2c0] transition hover:border-[#333b48] hover:bg-[#1a1f27] hover:text-white md:hidden" aria-label="Toggle workspace explorer">
+            {isSidebarOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
+          </button>
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#f4f5f7] text-sm font-bold text-[#12151a] shadow-sm">A</div>
+          <div className="min-w-0 leading-tight"><div className="truncate text-sm font-semibold tracking-tight text-white">Project Alisa Studio</div><div className="hidden text-[11px] text-[#7f8998] sm:block">AI coding workspace</div></div>
+          <div className="hidden h-6 w-px bg-[#2a303b] lg:block" />
+          <div className="hidden min-w-0 items-center gap-2 rounded-lg border border-[#29313d] bg-[#171b22] px-3 py-1.5 lg:flex" title={workspaceDir}><Folder className="h-3.5 w-3.5 shrink-0 text-[#93a4bd]" /><span className="max-w-[240px] truncate text-xs font-medium text-[#c4cbd6]">{workspaceLabel}</span></div>
         </div>
 
-        {/* Center Title & Live Agent Status Pill (Persistent 24/7) */}
-        <div className="hidden md:flex items-center gap-3 font-mono text-xs">
-          <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-[#181818] border border-[#2a2a2a] shadow-inner">
-            <span className={`w-2 h-2 rounded-full ${statusDot}`} />
-            <span className={`text-[11px] font-semibold ${statusColor}`}>
-              {statusLabel}
-            </span>
-            {visibleStatusDetail && (
-              <span className="text-[#777777] text-[10px] truncate max-w-[180px]">| {visibleStatusDetail}</span>
-            )}
-          </div>
-          <span className="text-[#444444]">•</span>
-          <span className="hidden xl:inline text-[#888888] truncate max-w-[180px]">{workspaceDir || 'Project workspace'}</span>
+        <div className="hidden items-center gap-2 lg:flex"><div className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs ${isBackendConnected ? 'border-[#24583a] bg-[#132319] text-[#9be7b0]' : 'border-[#5b4720] bg-[#251f12] text-[#f2c56d]'}`}><span className={`h-2 w-2 rounded-full ${statusDot}`} /><span>{statusLabel}</span>{visibleStatusDetail && <span className="max-w-[180px] truncate text-[#7f8998]">{visibleStatusDetail}</span>}</div></div>
+
+        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+          <button type="button" onClick={() => { if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ type: 'clear_history' })); setMessages([]); setStreamingContent(''); setStreamingThought(''); setActiveToolTraces([]); addTerminalLog('🧹 Started New Chat Session.'); setActiveTab('chat'); }} className="hidden h-9 items-center gap-1.5 rounded-lg border border-[#303744] bg-[#1a1f27] px-3 text-xs font-medium text-[#c4cbd6] transition hover:border-[#4a5567] hover:bg-[#222832] hover:text-white sm:inline-flex"><Plus className="h-3.5 w-3.5" /> New chat</button>
+          <button type="button" disabled={isBusy} onClick={handleOpenWorkspacePicker} className="hidden h-9 items-center gap-1.5 rounded-lg border border-[#303744] bg-[#1a1f27] px-3 text-xs font-medium text-[#c4cbd6] transition hover:border-[#4a5567] hover:bg-[#222832] hover:text-white disabled:cursor-not-allowed disabled:opacity-45 sm:inline-flex"><Folder className="h-3.5 w-3.5" /> Workspace</button>
+          <button type="button" onClick={() => setShowCommandPalette(true)} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#303744] bg-[#1a1f27] px-2.5 text-xs font-medium text-[#c4cbd6] transition hover:border-[#4a5567] hover:bg-[#222832] hover:text-white sm:px-3" title="Command palette (Ctrl+K)"><Command className="h-3.5 w-3.5" /><span className="hidden sm:inline">Commands</span><kbd className="hidden rounded bg-[#252c37] px-1.5 py-0.5 text-[10px] text-[#8f9aaa] sm:inline">Ctrl K</kbd></button>
+          <button type="button" onClick={() => { setSettingsError(null); setShowSettings(true); }} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-transparent text-[#aab2c0] transition hover:border-[#333b48] hover:bg-[#1a1f27] hover:text-white" aria-label="Open settings"><Settings className="h-4 w-4" /></button>
         </div>
+      </header>
 
-        {/* Right Status & Actions */}
-        <div className="flex items-center space-x-2 no-drag">
-          <button
-            onClick={() => {
-              if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-                wsRef.current.send(JSON.stringify({ type: 'clear_history' }));
-              }
-              setMessages([]);
-              addTerminalLog('🧹 Started New Chat Session.');
-            }}
-            className="flex items-center gap-1 px-2 py-1 rounded bg-[#1c1c1c] border border-[#2b2b2b] text-[11px] font-mono whitespace-nowrap text-[#aaaaaa] hover:text-[#ffffff] hover:border-[#444444] transition-all"
-            title="New Chat Session"
-          >
-            <span>+ New Chat</span>
-          </button>
+      <div className="relative flex min-h-0 flex-1">
+        {isSidebarOpen && <button type="button" aria-label="Dismiss explorer overlay" onClick={() => setIsSidebarOpen(false)} className="fixed inset-0 z-30 bg-black/60 md:hidden" />}
+        <aside className={`absolute inset-y-0 left-0 z-40 flex w-[min(86vw,18rem)] flex-col border-r border-[#252a33] bg-[#11141a] shadow-2xl transition-transform duration-200 md:relative md:z-0 md:w-72 md:translate-x-0 md:shadow-none ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+          <div className="flex h-[4.5rem] shrink-0 items-center justify-between border-b border-[#252a33] px-4"><div className="min-w-0"><div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#aeb7c5]"><FolderTree className="h-4 w-4 text-[#8192ac]" /> Explorer</div><div className="mt-1 truncate text-xs text-[#687487]" title={workspaceDir}>{workspaceLabel}</div></div><div className="flex items-center gap-1"><button type="button" onClick={fetchWorkspaceFiles} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[#778396] transition hover:bg-[#1d232c] hover:text-white" aria-label="Refresh files"><RefreshCw className={`h-3.5 w-3.5 ${isWorkspaceLoading ? 'animate-spin' : ''}`} /></button><button type="button" onClick={() => setIsSidebarOpen(false)} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[#778396] transition hover:bg-[#1d232c] hover:text-white md:hidden" aria-label="Close explorer"><X className="h-4 w-4" /></button></div></div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-2.5 py-3 custom-scrollbar">{fileTree.length > 0 ? <div className="space-y-0.5">{renderFileTree(fileTree)}</div> : isWorkspaceLoading ? <div className="space-y-2 px-2 py-3 text-xs text-[#778396]"><div className="h-3 w-3/4 animate-pulse rounded bg-[#202630]" /><div className="h-3 w-1/2 animate-pulse rounded bg-[#202630]" /><div className="h-3 w-2/3 animate-pulse rounded bg-[#202630]" /></div> : workspaceError ? <div className="m-1 rounded-lg border border-[#59343b] bg-[#27181d] p-3 text-xs leading-relaxed text-[#f0a9b1]"><p>{workspaceError}</p><button type="button" onClick={fetchWorkspaceFiles} className="mt-2 font-medium text-[#ffd4d8] underline underline-offset-2">Try again</button></div> : <div className="m-1 rounded-lg border border-dashed border-[#303744] p-4 text-center text-xs leading-relaxed text-[#778396]">No files in this workspace yet.</div>}</div>
+          <div className="shrink-0 border-t border-[#252a33] px-4 py-3"><div className="flex items-center gap-2 text-xs text-[#7e8999]"><span className={`h-2 w-2 rounded-full ${isBackendConnected ? 'bg-[#4fd27b]' : 'bg-[#d9a84e]'}`} /> {isBackendConnected ? 'Connected to local agent' : 'Waiting for local agent'}</div><div className="mt-1 truncate text-[11px] text-[#5f6b7d]" title={model}>{model}</div></div>
+        </aside>
 
-          <button
-            disabled={status === 'thinking' || status === 'acting' || status === 'waiting_approval' || status === 'self_correcting'}
-            onClick={handleOpenWorkspacePicker}
-            className="flex items-center gap-1 px-2 py-1 rounded bg-[#1c1c1c] border border-[#2b2b2b] text-[11px] font-mono whitespace-nowrap text-[#aaaaaa] hover:text-[#ffffff] hover:border-[#444444] disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-            title="Switch project workspace"
-          >
-            <span>📂 Workspace</span>
-          </button>
+        <main className="min-w-0 flex flex-1 flex-col bg-[#0b0d10]">
+          <div className="flex h-12 shrink-0 items-center gap-2 border-b border-[#252a33] bg-[#11141a] px-3 sm:px-4"><button type="button" onClick={() => setIsSidebarOpen(true)} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[#8f9aaa] hover:bg-[#1d232c] hover:text-white md:hidden" aria-label="Open explorer"><PanelLeftOpen className="h-4 w-4" /></button><nav className="tab-scroll flex min-w-0 items-center gap-1 overflow-x-auto" aria-label="Workspace views">{[{ id: 'chat' as const, label: 'Chat', icon: Bot }, { id: 'goal' as const, label: 'Goals', icon: Target, count: `${goalProgressPct}%` }, { id: 'skills' as const, label: 'Skills', icon: Puzzle, count: skills.length }, { id: 'editor' as const, label: 'Editor', icon: Code2 }, { id: 'terminal' as const, label: 'Activity', icon: Activity, count: terminalLogs.length }, { id: 'plan' as const, label: 'Roadmap', icon: ListTodo }].map((tab) => { const Icon = tab.icon; return <button key={tab.id} type="button" onClick={() => setActiveTab(tab.id)} aria-current={activeTab === tab.id ? 'page' : undefined} className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition sm:px-3 ${activeTab === tab.id ? 'bg-[#252c37] text-white shadow-sm' : 'text-[#8290a3] hover:bg-[#1a2028] hover:text-[#d8dde6]'}`}><Icon className="h-3.5 w-3.5" /><span>{tab.label}</span>{tab.count !== undefined && <span className={`rounded px-1.5 py-0.5 text-[10px] ${activeTab === tab.id ? 'bg-[#353e4c] text-[#dce3ee]' : 'bg-[#1a2028] text-[#728096]'}`}>{tab.count}</span>}</button>; })}</nav><div className={`ml-auto hidden shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] lg:flex ${isBackendConnected ? 'border-[#24583a] bg-[#132319] text-[#9be7b0]' : 'border-[#5b4720] bg-[#251f12] text-[#f2c56d]'}`}><span className={`h-1.5 w-1.5 rounded-full ${isBackendConnected ? 'bg-[#4fd27b]' : 'bg-[#d9a84e]'}`} />{isBackendConnected ? 'Agent online' : 'Agent offline'}</div></div>
 
-          <button
-            onClick={() => setShowCommandPalette(true)}
-            className="flex items-center gap-1.5 px-2 py-1 rounded bg-[#1c1c1c] border border-[#2b2b2b] text-[11px] font-mono whitespace-nowrap text-[#aaaaaa] hover:text-[#ffffff] hover:border-[#444444] transition-all"
-            title="Command Palette (Ctrl+K)"
-          >
-            <Command className="w-3 h-3 text-[#ffffff]" />
-            <span className="hidden sm:inline">Commands</span>
-            <kbd className="text-[9px] px-1 bg-[#262626] rounded text-[#888888]">Ctrl+K</kbd>
-          </button>
+          <div className="min-h-0 flex-1">
+            {activeTab === 'chat' && <div className="flex h-full min-h-0 flex-col"><div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar"><div className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 py-6 sm:px-6 sm:py-8">{messages.length === 0 && !streamingContent && activeToolTraces.length === 0 && <div className="flex flex-1 flex-col items-center justify-center py-12 text-center sm:py-20"><div className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#f4f5f7] text-xl font-bold text-[#12151a] shadow-[0_12px_28px_rgba(0,0,0,.28)]">A</div><p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-[#8290a3]">Project Alisa Studio</p><h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">What are we building today?</h1><p className="mt-3 max-w-lg text-sm leading-6 text-[#8995a7]">Ask Alisa to inspect your workspace, explain a file, or make a focused change.</p><div className="mt-8 grid w-full max-w-2xl grid-cols-1 gap-3 sm:grid-cols-3">{[['Inspect project', 'สรุปโครงสร้างโปรเจกต์', FolderTree], ['Find a bug', 'วิเคราะห์บั๊กให้หน่อย', Bug], ['Improve a file', 'ปรับปรุงไฟล์นี้ให้ดีขึ้น', Sparkles]].map(([label, prompt, Icon]) => { const PromptIcon = Icon as typeof FolderTree; return <button key={label as string} type="button" onClick={() => { setInputPrompt(prompt as string); setActiveTab('chat'); }} className="group rounded-xl border border-[#2b333f] bg-[#151a21] p-4 text-left transition hover:-translate-y-0.5 hover:border-[#53647b] hover:bg-[#1b222c]"><span className="mb-3 inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[#202936] text-[#a9b9d0] group-hover:text-white"><PromptIcon className="h-4 w-4" /></span><span className="block text-sm font-medium text-[#e5e9ef]">{label as string}</span><span className="mt-1 block text-xs text-[#7d899b]">{prompt as string}</span></button>; })}</div></div>}
+            {messages.map((m) => <div key={m.id} className={m.role === 'user' ? 'flex justify-end' : 'flex gap-3'}>{m.role === 'assistant' && <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#f4f5f7] text-xs font-bold text-[#12151a]">A</div>}<div className={m.role === 'user' ? 'max-w-[85%] sm:max-w-[75%]' : 'min-w-0 max-w-[88%] sm:max-w-[78%]'}>{m.role === 'user' ? <div className="rounded-2xl rounded-br-md bg-[#2a3442] px-4 py-3 text-sm leading-6 text-[#f1f4f8] shadow-sm">{m.content}</div> : <div className="space-y-3">{m.toolTraces?.map((trace, idx) => <div key={`${trace.toolCallId}-${idx}`} className="rounded-xl border border-[#2b333f] bg-[#151a21] p-3 text-xs"><div className="flex flex-wrap items-center gap-2"><span className="rounded bg-[#222b38] px-2 py-1 font-mono text-[10px] font-semibold uppercase tracking-wide text-[#b6c6dc]">{trace.toolName}</span><span className={`rounded px-2 py-1 text-[10px] font-medium ${trace.status === 'success' ? 'bg-[#183322] text-[#8ce0a7]' : trace.status === 'error' ? 'bg-[#3a2025] text-[#f2a2aa]' : 'bg-[#3b3019] text-[#f1c671]'}`}>{trace.status}</span></div>{(trace.result || trace.error) && <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-[#0d1015] p-2.5 font-mono text-[11px] leading-5 text-[#9da8b8]">{trace.error || trace.result}</pre>}</div>)}{m.thought && <details className="rounded-xl border border-[#2b333f] bg-[#12171e] text-xs text-[#8c99aa]"><summary className="cursor-pointer px-3 py-2 font-medium text-[#aab6c7]">Reasoning trace</summary><div className="border-t border-[#252d38] px-3 py-2.5 whitespace-pre-wrap leading-5">{m.thought}</div></details>}<div className="rounded-2xl rounded-tl-md border border-[#252d38] bg-[#151a21] px-4 py-3.5 text-sm leading-6 text-[#e1e6ed] shadow-sm"><div className="whitespace-pre-wrap">{m.content || 'No response content.'}</div></div></div>}<div className={`mt-1.5 text-[10px] text-[#637083] ${m.role === 'user' ? 'text-right' : ''}`}>{m.role === 'user' ? 'You' : 'Alisa'} · {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div></div></div>)}
+            {(streamingContent || streamingThought || activeToolTraces.length > 0) && <div className="flex gap-3"><div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#f4f5f7] text-xs font-bold text-[#12151a]">A</div><div className="min-w-0 max-w-[88%] space-y-3 sm:max-w-[78%]">{activeToolTraces.map((trace, idx) => <div key={`${trace.toolCallId}-${idx}`} className="rounded-xl border border-[#3d3523] bg-[#1b1811] p-3 text-xs"><div className="flex items-center gap-2"><span className="rounded bg-[#332a18] px-2 py-1 font-mono text-[10px] uppercase text-[#f1c671]">{trace.toolName}</span><span className="text-[#c89d45]">Running…</span></div></div>)}{streamingThought && <details open className="rounded-xl border border-[#2b333f] bg-[#12171e] text-xs text-[#8c99aa]"><summary className="cursor-pointer px-3 py-2 font-medium text-[#aab6c7]">Reasoning trace</summary><div className="border-t border-[#252d38] px-3 py-2.5 whitespace-pre-wrap leading-5">{streamingThought}</div></details>}{streamingContent && <div className="rounded-2xl rounded-tl-md border border-[#252d38] bg-[#151a21] px-4 py-3.5 text-sm leading-6 text-[#e1e6ed] whitespace-pre-wrap">{streamingContent}<span className="ml-1 inline-block h-4 w-1 animate-pulse bg-[#8da4c6] align-[-2px]" /></div>}</div></div>}
+            <div ref={chatEndRef} /></div></div><div className="shrink-0 border-t border-[#252a33] bg-[#11141a] px-3 py-3 sm:px-6 sm:py-4"><div className="mx-auto max-w-4xl"><div className="rounded-2xl border border-[#303846] bg-[#151a21] shadow-[0_12px_30px_rgba(0,0,0,.16)] focus-within:border-[#53647b]"><textarea rows={3} value={inputPrompt} onChange={(e) => setInputPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendPrompt(); } }} placeholder="Ask Alisa to inspect, explain, or change your code…" aria-label="Message Alisa" className="min-h-[92px] w-full resize-none bg-transparent px-4 py-3.5 text-sm leading-6 text-white placeholder-[#687487] focus:outline-none" /><div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#252d38] px-3 py-2.5"><div className="flex items-center gap-2"><button type="button" onClick={() => setShowCommandPalette(true)} className="inline-flex items-center gap-1.5 rounded-lg bg-[#202733] px-2.5 py-1.5 text-xs font-medium text-[#a9b6c8] transition hover:bg-[#293341] hover:text-white"><Command className="h-3.5 w-3.5" /> Actions</button><span className="inline-flex items-center gap-1.5 rounded-lg bg-[#202733] px-2.5 py-1.5 text-xs text-[#8d9aae]"><Puzzle className="h-3.5 w-3.5 text-[#c6a15a]" /> {activeSkillNames.length} skills</span></div><div className="flex items-center gap-2"><span className="hidden text-[11px] text-[#637083] sm:inline">Enter to send · Shift+Enter for a new line</span>{isBusy ? <button type="button" onClick={handleAbortTask} className="inline-flex items-center gap-1.5 rounded-lg bg-[#3a2025] px-3.5 py-2 text-xs font-semibold text-[#f2a2aa] transition hover:bg-[#4a252c]"><Square className="h-3.5 w-3.5 fill-current" /> Stop</button> : <button type="button" onClick={handleSendPrompt} disabled={!inputPrompt.trim() || !isBackendConnected} className="inline-flex items-center gap-1.5 rounded-lg bg-[#f0f2f5] px-3.5 py-2 text-xs font-semibold text-[#13161b] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"><Send className="h-3.5 w-3.5" /> Send</button>}</div></div></div><p className="mt-2 text-center text-[11px] text-[#637083]">Alisa can change files in the active workspace. Review edits before shipping.</p></div></div></div>}
 
-          <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#1a1a1a] border border-[#262626] text-[11px] font-mono text-[#888888]">
-            <div className={`w-2 h-2 rounded-full ${status === 'acting' || status === 'thinking' || status === 'waiting_approval' || status === 'self_correcting' ? 'bg-[#27c93f] animate-pulse' : 'bg-[#777777]'}`} />
-            <span className="text-[#cccccc] text-[10px]">{model.split('/')[1] || model}</span>
+            {activeTab === 'goal' && <div className="h-full overflow-y-auto custom-scrollbar"><div className="mx-auto max-w-5xl space-y-5 px-4 py-6 sm:px-6 sm:py-8"><div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#c6a15a]">Automation</p><h1 className="mt-2 text-2xl font-semibold tracking-tight text-white">Goal sequence</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-[#8995a7]">Break a larger task into visible steps so you can see what Alisa is doing and where it stopped.</p></div><button type="button" onClick={handleStartGoalAutomation} disabled={isAutomatingGoal} className="inline-flex items-center gap-2 rounded-lg bg-[#d5b36a] px-4 py-2.5 text-sm font-semibold text-[#1a1710] transition hover:bg-[#e1c27f] disabled:cursor-not-allowed disabled:opacity-50"><PlayCircle className="h-4 w-4" />{isAutomatingGoal ? 'Running…' : 'Run sequence'}</button></div><section className="rounded-2xl border border-[#2b333f] bg-[#151a21] p-5 sm:p-6"><div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#8290a3]"><Target className="h-4 w-4 text-[#c6a15a]" /> Objective</div><input type="text" value={goalObjective} onChange={(e) => setGoalObjective(e.target.value)} className="mt-3 w-full rounded-xl border border-[#303846] bg-[#0d1015] px-4 py-3 text-sm text-white outline-none transition focus:border-[#657895]" /><div className="mt-5"><div className="flex items-center justify-between text-xs"><span className="text-[#8290a3]">Progress</span><span className="font-semibold text-[#d5b36a]">{goalProgressPct}% complete</span></div><div className="mt-2 h-2 overflow-hidden rounded-full bg-[#252d38]"><div className="h-full rounded-full bg-[#d5b36a] transition-all duration-500" style={{ width: `${goalProgressPct}%` }} /></div></div></section><section className="space-y-3"><div className="flex items-center justify-between"><h2 className="text-sm font-semibold text-white">Steps</h2><span className="text-xs text-[#718097]">{completedStepsCount} of {goalSteps.length} complete</span></div>{goalSteps.map((step, idx) => <div key={step.id} className={`flex gap-4 rounded-2xl border p-4 ${step.status === 'completed' ? 'border-[#285238] bg-[#132319]' : step.status === 'in_progress' ? 'border-[#5b4720] bg-[#251f12]' : 'border-[#2b333f] bg-[#151a21]'}`}><div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-sm font-semibold ${step.status === 'completed' ? 'bg-[#1d4a2c] text-[#9be7b0]' : step.status === 'in_progress' ? 'bg-[#604b1e] text-[#f5d58a]' : 'bg-[#252d38] text-[#91a0b5]'}`}>{step.status === 'completed' ? <Check className="h-4 w-4" /> : idx + 1}</div><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-medium text-white">{step.title}</h3><span className="text-[10px] font-semibold uppercase tracking-wide text-[#91a0b5]">{step.status.replace('_', ' ')}</span></div><p className="mt-1 text-sm leading-5 text-[#8995a7]">{step.description}</p></div></div>)}</section></div></div>}
+
+            {activeTab === 'skills' && <div className="h-full overflow-y-auto custom-scrollbar"><div className="mx-auto max-w-5xl space-y-6 px-4 py-6 sm:px-6 sm:py-8"><div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#b8a2da]">Agent configuration</p><h1 className="mt-2 text-2xl font-semibold tracking-tight text-white">Skills</h1><p className="mt-2 text-sm leading-6 text-[#8995a7]">Choose the guidance Alisa should use for this session.</p></div><button type="button" onClick={fetchSkills} className="inline-flex items-center gap-2 rounded-lg border border-[#303846] bg-[#1a1f27] px-3.5 py-2.5 text-sm font-medium text-[#c4cbd6] transition hover:border-[#53647b] hover:bg-[#222832] hover:text-white"><RefreshCw className="h-3.5 w-3.5" /> Refresh</button></div><div className="grid grid-cols-1 gap-3 lg:grid-cols-2">{skills.map((skill) => { const isActive = activeSkillNames.includes(skill.name); return <div key={skill.name} className={`rounded-2xl border p-4 transition ${isActive ? 'border-[#4a4161] bg-[#1b1824]' : 'border-[#2b333f] bg-[#151a21]'}`}><div className="flex items-start justify-between gap-4"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="break-all text-sm font-medium text-white">{skill.name}</h2><span className="rounded bg-[#252d38] px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-[#8f9aaa]">{skill.category}</span></div><p className="mt-2 text-sm leading-5 text-[#8995a7]">{skill.description}</p><p className="mt-3 text-[11px] text-[#637083]">{skill.source}</p></div><button type="button" onClick={() => toggleSkillActive(skill.name)} className={`shrink-0 rounded-lg px-3 py-2 text-xs font-semibold transition ${isActive ? 'bg-[#c7b0e7] text-[#211b2b] hover:bg-[#d7c5ef]' : 'border border-[#394454] bg-[#202733] text-[#a9b6c8] hover:border-[#657895] hover:text-white'}`}>{isActive ? 'Enabled' : 'Enable'}</button></div></div>; })}</div>{skills.length === 0 && <div className="rounded-2xl border border-dashed border-[#303846] p-8 text-center text-sm text-[#778396]">No skills were found. Refresh to try again.</div>}</div></div>}
+
+            {activeTab === 'editor' && <div className="flex h-full min-h-0 flex-col"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#252a33] bg-[#11141a] px-4 py-3"><div className="min-w-0"><div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-[#8290a3]"><Code2 className="h-4 w-4" /> Editor</div><div className="mt-1 truncate text-sm text-white" title={selectedFile || undefined}>{selectedFile || 'Choose a file from Explorer'}</div></div><div className="flex items-center gap-2"><span className={`text-xs ${editorDirty ? 'text-[#d5b36a]' : 'text-[#718097]'}`}>{editorDirty ? 'Unsaved changes' : selectedFile ? 'Saved' : ''}</span><button type="button" disabled={!selectedFile || editorDirty || isSavingFile} onClick={() => selectedFile && handleFileClick(selectedFile)} className="rounded-lg border border-[#303846] bg-[#1a1f27] px-3 py-2 text-xs font-medium text-[#a9b6c8] transition hover:border-[#53647b] hover:text-white disabled:cursor-not-allowed disabled:opacity-40">Reload</button><button type="button" disabled={!selectedFile || !editorDirty || isSavingFile} onClick={handleSaveFile} className="inline-flex items-center gap-1.5 rounded-lg bg-[#f0f2f5] px-3 py-2 text-xs font-semibold text-[#13161b] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"><Save className="h-3.5 w-3.5" />{isSavingFile ? 'Saving…' : 'Save'}</button></div></div>{editorError && <div className="border-b border-[#59343b] bg-[#27181d] px-4 py-2.5 text-xs text-[#f0a9b1]">{editorError}</div>}{selectedFile ? <textarea value={editorDraft} onChange={(e) => setEditorDraft(e.target.value)} onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); handleSaveFile(); } }} spellCheck={false} aria-label={`Editing ${selectedFile}`} className="min-h-0 flex-1 resize-none overflow-auto bg-[#0d1015] px-4 py-4 font-mono text-[13px] leading-6 text-[#d8dee8] outline-none sm:px-6" /> : <div className="flex flex-1 items-center justify-center p-6"><div className="max-w-sm text-center"><div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[#202733] text-[#a9b6c8]"><FileCode className="h-5 w-5" /></div><h2 className="mt-4 text-base font-semibold text-white">Choose a file to edit</h2><p className="mt-2 text-sm leading-6 text-[#778396]">Select a file in Explorer. Changes are saved with a snapshot so Rollback can restore the previous version.</p></div></div>}</div>}
+
+            {activeTab === 'terminal' && <div className="flex h-full min-h-0 flex-col"><div className="flex items-center justify-between border-b border-[#252a33] bg-[#11141a] px-4 py-3"><div><div className="flex items-center gap-2 text-sm font-semibold text-white"><Activity className="h-4 w-4 text-[#8da4c6]" /> Activity</div><p className="mt-1 text-xs text-[#718097]">Realtime agent and workspace events</p></div><button type="button" onClick={() => setTerminalLogs([])} className="rounded-lg border border-[#303846] bg-[#1a1f27] px-3 py-2 text-xs font-medium text-[#a9b6c8] transition hover:border-[#53647b] hover:text-white">Clear</button></div><div className="min-h-0 flex-1 overflow-y-auto bg-[#0d1015] px-4 py-4 custom-scrollbar sm:px-6"><div className="mx-auto max-w-5xl space-y-1 font-mono text-xs leading-5">{terminalLogs.length === 0 ? <div className="py-8 text-center text-[#637083]">No activity yet.</div> : terminalLogs.slice(-300).map((log, i) => <div key={`${log}-${i}`} className="whitespace-pre-wrap break-words text-[#9aa7b9]"><span className="mr-2 select-none text-[#53647b]">›</span>{log}</div>)}</div></div></div>}
+
+            {activeTab === 'plan' && <div className="h-full overflow-y-auto custom-scrollbar"><div className="mx-auto max-w-5xl space-y-6 px-4 py-6 sm:px-6 sm:py-8"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#8da4c6]">Project view</p><h1 className="mt-2 text-2xl font-semibold tracking-tight text-white">Roadmap</h1><p className="mt-2 text-sm leading-6 text-[#8995a7]">A lightweight record of the work planned for Project Alisa Studio.</p></div><div className="space-y-3">{planItems.map((item) => <div key={item.id} className="flex items-start gap-4 rounded-2xl border border-[#2b333f] bg-[#151a21] p-4"><div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${item.status === 'completed' ? 'bg-[#1d4a2c] text-[#9be7b0]' : 'bg-[#604b1e] text-[#f5d58a]'}`}>{item.status === 'completed' ? <Check className="h-4 w-4" /> : <CircleDot className="h-4 w-4" />}</div><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-sm font-medium text-white">{item.title}</h2><span className="text-[10px] font-semibold uppercase tracking-wide text-[#8290a3]">{item.status.replace('_', ' ')}</span></div></div></div>)}</div></div></div>}
           </div>
-
-          <button
-            onClick={() => {
-              setSettingsError(null);
-              setShowSettings(true);
-            }}
-            className="p-1 rounded text-[#888888] hover:text-[#ffffff] hover:bg-[#242424] transition-colors"
-            title="Settings"
-          >
-            <Settings className="w-4 h-4" />
-          </button>
-        </div>
+        </main>
       </div>
 
-      {/* ── Main Application Content Layout ── */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* ── Left Sidebar (Workspace & File Explorer) ── */}
-        <div className="w-64 bg-[#121212] border-r border-[#242424] flex flex-col shrink-0">
-          <div className="p-3 border-b border-[#242424] flex items-center justify-between">
-            <span className="text-xs font-mono font-bold text-[#aaaaaa] uppercase tracking-wider flex items-center gap-1.5">
-              <FolderTree className="w-3.5 h-3.5 text-[#ffffff]" /> Explorer
-            </span>
-            <button onClick={fetchWorkspaceFiles} className="text-[#666666] hover:text-[#ffffff]">
-              <RefreshCw className="w-3 h-3" />
-            </button>
-          </div>
+      {showCommandPalette && <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/70 px-4 pt-[12vh]" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) setShowCommandPalette(false); }}><div className="w-full max-w-xl overflow-hidden rounded-2xl border border-[#3a4351] bg-[#151a21] shadow-[0_24px_70px_rgba(0,0,0,.5)]" role="dialog" aria-modal="true" aria-label="Command palette"><div className="flex items-center gap-3 border-b border-[#2b333f] px-4 py-3"><Search className="h-4 w-4 shrink-0 text-[#7e8ba0]" /><input autoFocus value={commandSearch} onChange={(e) => setCommandSearch(e.target.value)} placeholder="Search commands…" className="min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder-[#687487]" /><kbd className="rounded bg-[#252d38] px-2 py-1 text-[10px] text-[#8f9aaa]">Esc</kbd></div><div className="max-h-[min(60vh,28rem)] overflow-y-auto p-2 custom-scrollbar">{quickCommands.filter((cmd) => `${cmd.command} ${cmd.label} ${cmd.description}`.toLowerCase().includes(commandSearch.toLowerCase())).map((cmd) => <button key={cmd.id} type="button" onClick={() => handleExecuteCommand(cmd)} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition hover:bg-[#202733]"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#202733]">{cmd.icon}</span><span className="min-w-0 flex-1"><span className="flex flex-wrap items-center gap-2 text-sm font-medium text-white"><span>{cmd.label}</span><span className="font-mono text-xs text-[#718097]">{cmd.command}</span></span><span className="mt-1 block text-xs leading-5 text-[#8995a7]">{cmd.description}</span></span><ArrowRight className="h-4 w-4 shrink-0 text-[#657895]" /></button>)}{quickCommands.filter((cmd) => `${cmd.command} ${cmd.label} ${cmd.description}`.toLowerCase().includes(commandSearch.toLowerCase())).length === 0 && <div className="p-8 text-center text-sm text-[#778396]">No matching commands.</div>}</div></div></div>}
 
-          <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
-            {fileTree.length > 0 ? (
-              renderFileTree(fileTree)
-            ) : isWorkspaceLoading ? (
-              <div className="text-xs text-[#777777] p-3 font-mono italic">
-                Loading workspace files…
-              </div>
-            ) : workspaceError ? (
-              <div className="p-3 space-y-2">
-                <div className="text-xs text-[#ff8a80] leading-relaxed">{workspaceError}</div>
-                <button
-                  onClick={fetchWorkspaceFiles}
-                  className="text-[11px] text-[#cccccc] hover:text-white underline underline-offset-2"
-                >
-                  Try again
-                </button>
-              </div>
-            ) : (
-              <div className="text-xs text-[#777777] p-3 font-mono italic">
-                This workspace has no visible files.
-              </div>
-            )}
-          </div>
-        </div>
+      {showWorkspacePicker && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) setShowWorkspacePicker(false); }}><form onSubmit={(event) => { event.preventDefault(); handleSwitchWorkspace(); }} className="w-full max-w-lg rounded-2xl border border-[#3a4351] bg-[#151a21] p-5 shadow-[0_24px_70px_rgba(0,0,0,.5)] sm:p-6" role="dialog" aria-modal="true" aria-label="Switch workspace"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#8da4c6]">Workspace</p><h2 className="mt-1 text-lg font-semibold text-white">Switch project folder</h2><p className="mt-1 text-sm leading-5 text-[#8995a7]">Alisa will read and edit files inside this folder.</p></div><button type="button" onClick={() => setShowWorkspacePicker(false)} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[#8290a3] hover:bg-[#202733] hover:text-white" aria-label="Close"><X className="h-4 w-4" /></button></div><label htmlFor="workspace-path" className="mt-6 block text-xs font-medium text-[#a9b6c8]">Absolute path</label><input id="workspace-path" type="text" value={workspaceInput} onChange={(event) => setWorkspaceInput(event.target.value)} placeholder="C:/Users/you/Projects/my-app" autoFocus className="mt-2 w-full rounded-xl border border-[#303846] bg-[#0d1015] px-3.5 py-3 text-sm text-white outline-none transition focus:border-[#657895]" />{workspaceSwitchError && <div className="mt-3 rounded-xl border border-[#59343b] bg-[#27181d] px-3 py-2.5 text-xs leading-5 text-[#f0a9b1]">{workspaceSwitchError}</div>}<div className="mt-6 flex justify-end gap-2 border-t border-[#2b333f] pt-4"><button type="button" onClick={() => setShowWorkspacePicker(false)} className="rounded-lg border border-[#303846] bg-[#1a1f27] px-3.5 py-2.5 text-sm font-medium text-[#a9b6c8] hover:border-[#53647b] hover:text-white">Cancel</button><button type="submit" className="rounded-lg bg-[#f0f2f5] px-3.5 py-2.5 text-sm font-semibold text-[#13161b] hover:bg-white">Switch workspace</button></div></form></div>}
 
-        {/* ── Center Main Editor / Chat Panel ── */}
-        <div className="min-w-0 flex-1 flex flex-col bg-[#0e0e0e] overflow-hidden">
-          {/* Top Tab Bar Navigation */}
-          <div className="min-w-0 h-10 bg-[#141414] border-b border-[#242424] px-3 flex items-center justify-between shrink-0">
-            <div className="tab-scroll min-w-0 flex items-center space-x-1 overflow-x-auto">
-              <button
-                onClick={() => setActiveTab('chat')}
-                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-mono whitespace-nowrap shrink-0 transition-colors rounded ${
-                  activeTab === 'chat' ? 'bg-[#242424] text-[#ffffff] font-semibold' : 'text-[#888888] hover:text-[#cccccc]'
-                }`}
-              >
-                <Bot className="w-3.5 h-3.5 text-[#ffffff]" /> Agent Chat
-              </button>
-
-              <button
-                onClick={() => setActiveTab('goal')}
-                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-mono whitespace-nowrap shrink-0 transition-colors rounded ${
-                  activeTab === 'goal' ? 'bg-[#242424] text-[#27c93f] font-semibold' : 'text-[#888888] hover:text-[#cccccc]'
-                }`}
-              >
-                <Target className="w-3.5 h-3.5 text-[#27c93f]" /> Automate Goal ({goalProgressPct}%)
-              </button>
-
-              <button
-                onClick={() => setActiveTab('skills')}
-                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-mono whitespace-nowrap shrink-0 transition-colors rounded ${
-                  activeTab === 'skills' ? 'bg-[#242424] text-[#ffffff] font-semibold' : 'text-[#888888] hover:text-[#cccccc]'
-                }`}
-              >
-                <Puzzle className="w-3.5 h-3.5 text-[#ffbd2e]" /> Skill Manager ({skills.length})
-              </button>
-
-              <button
-                onClick={() => setActiveTab('editor')}
-                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-mono whitespace-nowrap shrink-0 transition-colors rounded ${
-                  activeTab === 'editor' ? 'bg-[#242424] text-[#ffffff] font-semibold' : 'text-[#888888] hover:text-[#cccccc]'
-                }`}
-              >
-                <Code2 className="w-3.5 h-3.5 text-[#ffffff]" /> Editor & Diffs
-              </button>
-
-              <button
-                onClick={() => setActiveTab('terminal')}
-                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-mono whitespace-nowrap shrink-0 transition-colors rounded ${
-                  activeTab === 'terminal' ? 'bg-[#242424] text-[#ffffff] font-semibold' : 'text-[#888888] hover:text-[#cccccc]'
-                }`}
-              >
-                <TerminalIcon className="w-3.5 h-3.5 text-[#ffffff]" /> Terminal ({terminalLogs.length})
-              </button>
-
-              <button
-                onClick={() => setActiveTab('plan')}
-                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-mono whitespace-nowrap shrink-0 transition-colors rounded ${
-                  activeTab === 'plan' ? 'bg-[#242424] text-[#ffffff] font-semibold' : 'text-[#888888] hover:text-[#cccccc]'
-                }`}
-              >
-                <ListTodo className="w-3.5 h-3.5 text-[#ffffff]" /> Roadmap
-              </button>
-            </div>
-
-            <div className={`hidden lg:flex items-center gap-2 text-[10px] font-mono px-2 py-1 rounded-full border ${
-              isBackendConnected
-                ? 'text-[#7ee787] border-[#214d2b] bg-[#122218]'
-                : 'text-[#ffbd2e] border-[#4a3b1a] bg-[#211c10]'
-            }`} title={isBackendConnected ? 'Backend connected' : 'Backend offline'}>
-              <span className={`w-1.5 h-1.5 rounded-full ${isBackendConnected ? 'bg-[#27c93f]' : 'bg-[#ffbd2e]'}`} />
-              {isBackendConnected ? 'Backend connected' : 'Backend offline'}
-            </div>
-          </div>
-
-          {/* ── TAB 1: REACT EXECUTION LOGS & CHAT ── */}
-          {activeTab === 'chat' && (
-            <div className="flex-1 flex flex-col overflow-hidden">
-              <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
-                {messages.length === 0 && !streamingContent && activeToolTraces.length === 0 && (
-                  <div className="h-full min-h-[280px] flex items-center justify-center px-6">
-                    <div className="w-full max-w-xl text-center">
-                      <div className="mx-auto mb-4 w-12 h-12 rounded-2xl bg-[#f4f4f4] text-[#101010] flex items-center justify-center text-xl font-bold shadow-lg shadow-black/20">
-                        A
-                      </div>
-                      <h1 className="text-xl font-semibold tracking-tight text-white">Project Alisa Studio</h1>
-                      <p className="mt-2 text-sm leading-relaxed text-[#8f8f8f]">
-                        Ask the agent to inspect, explain, or change the code in your workspace.
-                      </p>
-                      <div className="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-2 text-left">
-                        {[
-                          ['Inspect this project', 'สรุปโครงสร้างโปรเจกต์'],
-                          ['Find a bug', 'วิเคราะห์บั๊กให้หน่อย'],
-                          ['Improve a file', 'ปรับปรุงไฟล์นี้ให้ดีขึ้น'],
-                        ].map(([label, prompt]) => (
-                          <button
-                            key={label}
-                            onClick={() => setInputPrompt(prompt)}
-                            className="rounded-xl border border-[#2b2b2b] bg-[#151515] px-3 py-3 text-left transition-colors hover:border-[#555555] hover:bg-[#1b1b1b]"
-                          >
-                            <div className="text-xs font-medium text-[#e5e5e5]">{label}</div>
-                            <div className="mt-1 text-[11px] text-[#777777]">{prompt}</div>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )}
-                {messages.map((m) => (
-                  <div key={m.id} className="space-y-2">
-                    {/* User Prompt Bubble */}
-                    {m.role === 'user' && (
-                      <div className="flex justify-end">
-                        <div className="bg-[#242424] text-[#ffffff] px-4 py-2.5 rounded-2xl rounded-tr-none text-sm max-w-2xl font-sans border border-[#333333] shadow-md">
-                          {m.content}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Assistant Response & ReAct Execution Logs */}
-                    {m.role === 'assistant' && (
-                      <div className="space-y-3">
-                        {/* Tool Execution Cards (ReAct Trace Cards) */}
-                        {m.toolTraces && m.toolTraces.map((trace, idx) => (
-                          <div key={idx} className="bg-[#141414] border border-[#242424] rounded-xl p-3 text-xs font-mono space-y-2">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-2">
-                                <span className="px-2 py-0.5 rounded bg-[#262626] text-[#ffffff] font-bold text-[10px] uppercase tracking-wider">
-                                  {trace.toolName}
-                                </span>
-                                <span className="text-[#888888] truncate max-w-md">
-                                  {JSON.stringify(trace.args)}
-                                </span>
-                              </div>
-                              <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${
-                                trace.status === 'success' ? 'bg-[#1a331e] text-[#27c93f]' : 'bg-[#3b1c1c] text-[#ff5f56]'
-                              }`}>
-                                {trace.status}
-                              </span>
-                            </div>
-
-                            {trace.result && (
-                              <pre className="bg-[#0a0a0a] p-2.5 rounded-lg text-[11px] text-[#cccccc] overflow-x-auto border border-[#1f1f1f]">
-                                {trace.result}
-                              </pre>
-                            )}
-                          </div>
-                        ))}
-
-                        {/* Assistant Thought Block */}
-                        {m.thought && (
-                          <div className="bg-[#121212] border-l-2 border-[#777777] p-3 text-xs font-mono text-[#888888] rounded-r-lg space-y-1">
-                            <div className="text-[10px] uppercase font-bold text-[#aaaaaa] flex items-center gap-1">
-                              <Sparkles className="w-3 h-3 text-[#ffffff]" /> Thought Process
-                            </div>
-                            <div className="whitespace-pre-wrap leading-relaxed">{m.thought}</div>
-                          </div>
-                        )}
-
-                        {/* Assistant Final Content Output */}
-                        <div className="bg-[#121212] border border-[#242424] rounded-2xl rounded-tl-none p-4 text-sm font-sans text-[#e0e0e0] leading-relaxed space-y-2 shadow-lg">
-                          <div className="whitespace-pre-wrap">{m.content}</div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-
-                {/* Streaming Assistant Card */}
-                {(streamingContent || activeToolTraces.length > 0) && (
-                  <div className="space-y-3">
-                    {activeToolTraces.map((trace, idx) => (
-                      <div key={idx} className="bg-[#141414] border border-[#242424] rounded-xl p-3 text-xs font-mono space-y-2 animate-pulse">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <span className="px-2 py-0.5 rounded bg-[#262626] text-[#ffffff] font-bold text-[10px] uppercase">
-                              {trace.toolName}
-                            </span>
-                            <span className="text-[#888888]">{JSON.stringify(trace.args)}</span>
-                          </div>
-                          <span className="text-[10px] text-[#ffbd2e]">EXECUTING...</span>
-                        </div>
-                      </div>
-                    ))}
-
-                    {streamingContent && (
-                      <div className="bg-[#121212] border border-[#242424] rounded-2xl rounded-tl-none p-4 text-sm font-sans text-[#e0e0e0] whitespace-pre-wrap">
-                        {streamingContent}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <div ref={chatEndRef} />
-              </div>
-
-              {/* ── Input Box Container (OpenCode Minimalist Floating Design) ── */}
-              <div className="p-4 bg-[#121212] border-t border-[#242424] shrink-0">
-                <div className="bg-[#181818] border border-[#262626] rounded-xl p-3 space-y-2.5 focus-within:border-[#444444] transition-all shadow-inner">
-                  <textarea
-                    rows={3}
-                    value={inputPrompt}
-                    onChange={(e) => setInputPrompt(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        handleSendPrompt();
-                      }
-                    }}
-                    placeholder="ถามคำสั่ง หรือสั่งงานพัฒนาโค้ด (เช่น 'เขียนโค้ด', 'วิเคราะห์บั๊ก', '/goal', '/audit')..."
-                    className="w-full bg-transparent text-xs text-[#ffffff] placeholder-[#555555] focus:outline-none resize-none font-sans"
-                  />
-
-                  <div className="flex items-center justify-between border-t border-[#222222] pt-2">
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => setShowCommandPalette(true)}
-                        className="px-2.5 py-1 rounded-full bg-[#222222] text-[#888888] hover:text-[#ffffff] text-[10px] font-mono flex items-center gap-1 hover:bg-[#2b2b2b] transition-all"
-                      >
-                        <Command className="w-3 h-3 text-[#ffffff]" /> Quick Actions
-                      </button>
-
-                      <div className="px-2.5 py-1 rounded-full bg-[#222222] text-[#888888] text-[10px] font-mono flex items-center gap-1">
-                        <Puzzle className="w-3 h-3 text-[#ffbd2e]" /> Skills: {activeSkillNames.length} Active
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] text-[#666666] font-mono hidden sm:inline">Press Enter to Send</span>
-                      <button
-                        onClick={handleSendPrompt}
-                        disabled={!inputPrompt.trim() || status === 'thinking' || status === 'acting' || status === 'waiting_approval' || status === 'self_correcting'}
-                        className="px-3.5 py-1.5 rounded-lg bg-[#ffffff] text-[#0e0e0e] hover:bg-[#e0e0e0] font-bold text-xs disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center gap-1.5"
-                      >
-                        <Send className="w-3 h-3" /> ส่งคำสั่ง
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Mandatory Safety Notice */}
-                <div className="text-center mt-2.5 text-[10px] text-[#666666] font-sans">
-                  Alisa เป็นเพียง AI ที่อาจทำงานผิดได้ โปรดตรวจสอบคำตอบทุกครั้ง
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* ── TAB 2: AUTOMATED GOAL ENGINE ── */}
-          {activeTab === 'goal' && (
-            <div className="flex-1 p-6 overflow-y-auto bg-[#0e0e0e] space-y-6 custom-scrollbar">
-              <div className="bg-[#141414] border border-[#262626] rounded-2xl p-5 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-[#1f3a22] border border-[#27c93f] flex items-center justify-center">
-                      <Target className="w-5 h-5 text-[#27c93f]" />
-                    </div>
-                    <div>
-                      <h2 className="text-sm font-bold text-[#ffffff] font-mono">Autonomous Goal Execution Engine</h2>
-                      <p className="text-xs text-[#888888]">วางแผนและประมวลผลงานแบบอัตโนมัติทีละขั้นตอน (Sequential Subtask Execution)</p>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={handleStartGoalAutomation}
-                    disabled={isAutomatingGoal}
-                    className="px-4 py-2 rounded-xl bg-[#27c93f] text-[#0e0e0e] font-bold text-xs font-mono hover:bg-[#22b537] disabled:opacity-50 transition-all flex items-center gap-2 shadow-lg"
-                  >
-                    {isAutomatingGoal ? <PauseCircle className="w-4 h-4 animate-spin" /> : <PlayCircle className="w-4 h-4" />}
-                    {isAutomatingGoal ? 'Executing Goal...' : 'Run Goal Sequence'}
-                  </button>
-                </div>
-
-                {/* Goal Objective Input */}
-                <div className="space-y-1.5">
-                  <label className="text-xs font-mono text-[#888888]">Goal Objective</label>
-                  <input
-                    type="text"
-                    value={goalObjective}
-                    onChange={(e) => setGoalObjective(e.target.value)}
-                    className="w-full px-3.5 py-2 rounded-xl bg-[#0a0a0a] border border-[#262626] text-xs text-[#ffffff] font-mono focus:outline-none focus:border-[#444444]"
-                  />
-                </div>
-
-                {/* Progress Bar */}
-                <div className="space-y-1.5">
-                  <div className="flex justify-between text-xs font-mono">
-                    <span className="text-[#888888]">Goal Progress</span>
-                    <span className="text-[#27c93f] font-bold">{goalProgressPct}% Completed</span>
-                  </div>
-                  <div className="w-full h-2 rounded-full bg-[#222222] overflow-hidden">
-                    <div className="h-full bg-[#27c93f] transition-all duration-500" style={{ width: `${goalProgressPct}%` }} />
-                  </div>
-                </div>
-              </div>
-
-              {/* Goal Steps List */}
-              <div className="space-y-3">
-                <h3 className="text-xs font-bold text-[#aaaaaa] font-mono uppercase tracking-wider">Sequential Action Plan</h3>
-                {goalSteps.map((step, idx) => (
-                  <div
-                    key={step.id}
-                    className={`p-4 rounded-xl border flex items-center justify-between transition-all ${
-                      step.status === 'completed'
-                        ? 'bg-[#141a14] border-[#1e3b21]'
-                        : step.status === 'in_progress'
-                        ? 'bg-[#1a1810] border-[#3d3319]'
-                        : 'bg-[#121212] border-[#222222]'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-7 h-7 rounded-lg bg-[#222222] text-[#ffffff] font-mono text-xs font-bold flex items-center justify-center">
-                        {idx + 1}
-                      </div>
-                      <div>
-                        <div className="font-bold text-xs text-[#ffffff] font-mono">{step.title}</div>
-                        <div className="text-xs text-[#888888]">{step.description}</div>
-                      </div>
-                    </div>
-
-                    <span className={`px-2.5 py-1 rounded-full text-[10px] font-mono uppercase font-bold ${
-                      step.status === 'completed'
-                        ? 'bg-[#1a331e] text-[#27c93f]'
-                        : step.status === 'in_progress'
-                        ? 'bg-[#3d3319] text-[#ffbd2e] animate-pulse'
-                        : 'bg-[#222222] text-[#777777]'
-                    }`}>
-                      {step.status}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ── TAB 3: SKILL SYSTEM MANAGER ── */}
-          {activeTab === 'skills' && (
-            <div className="flex-1 p-6 overflow-y-auto bg-[#0e0e0e] space-y-4 custom-scrollbar">
-              <div className="flex items-center justify-between pb-3 border-b border-[#242424]">
-                <div>
-                  <h2 className="text-sm font-bold text-[#ffffff] font-mono flex items-center gap-2">
-                    <Puzzle className="w-4 h-4 text-[#ffbd2e]" /> Agent Skills
-                  </h2>
-                  <p className="text-xs text-[#888888]">เปิดใช้ความสามารถที่ Alisa ควรใช้กับงานใน session นี้</p>
-                </div>
-                <button
-                  onClick={fetchSkills}
-                  className="px-3 py-1.5 rounded bg-[#1c1c1c] hover:bg-[#242424] text-[#ffffff] text-xs font-mono border border-[#262626]"
-                >
-                  Refresh Skills
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {skills.map((skill) => {
-                  const isActive = activeSkillNames.includes(skill.name);
-                  return (
-                    <div
-                      key={skill.name}
-                      className={`p-4 rounded-xl border transition-all ${
-                        isActive
-                          ? 'bg-[#161616] border-[#383838]'
-                          : 'bg-[#121212] border-[#222222]'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <span className="font-bold text-xs text-[#ffffff] font-mono">{skill.name}</span>
-                            <span className="text-[9px] px-2 py-0.5 rounded bg-[#242424] text-[#888888] font-mono uppercase">
-                              {skill.category}
-                            </span>
-                          </div>
-                          <p className="text-xs text-[#aaaaaa] leading-relaxed">{skill.description}</p>
-                        </div>
-                        <button
-                          onClick={() => toggleSkillActive(skill.name)}
-                          className={`px-3 py-1 rounded text-xs font-mono transition-all ${
-                            isActive
-                              ? 'bg-[#27c93f] text-[#0e0e0e] font-bold'
-                              : 'bg-[#222222] text-[#888888] hover:text-[#ffffff]'
-                          }`}
-                        >
-                          {isActive ? 'ACTIVE' : 'ENABLE'}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* ── TAB 4: EDITOR & FILE DIFFS ── */}
-          {activeTab === 'editor' && (
-            <div className="flex-1 flex flex-col bg-[#0e0e0e] overflow-hidden">
-              <div className="p-3 bg-[#121212] border-b border-[#242424] text-xs font-mono text-[#888888] flex items-center justify-between">
-                <span>File: <strong className="text-[#ffffff]">{selectedFile || 'No file selected'}</strong></span>
-                <span className="text-[10px] text-[#666666]">Read-only Diff Viewer</span>
-              </div>
-              <div className="flex-1 overflow-auto p-4 custom-scrollbar">
-                {fileContent ? (
-                  <pre className="text-xs font-mono text-[#dddddd] whitespace-pre-wrap leading-relaxed">
-                    {fileContent}
-                  </pre>
-                ) : (
-                  <div className="h-full flex items-center justify-center text-xs text-[#666666] font-mono">
-                    เลือกไฟล์ทางซ้ายเพื่อแสดงโค้ดและ Diff
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* ── TAB 5: TERMINAL CONSOLE LOGS ── */}
-          {activeTab === 'terminal' && (
-            <div className="flex-1 flex flex-col bg-[#0a0a0a] overflow-hidden font-mono p-4">
-              <div className="flex items-center justify-between pb-3 border-b border-[#222222] mb-3">
-                <span className="text-xs font-bold text-[#aaaaaa] flex items-center gap-2">
-                  <TerminalIcon className="w-4 h-4 text-[#ffffff]" /> Terminal & ReAct System Logs
-                </span>
-                <button
-                  onClick={() => setTerminalLogs([])}
-                  className="px-2.5 py-1 rounded bg-[#1c1c1c] text-[#888888] hover:text-[#ffffff] text-xs"
-                >
-                  Clear Console
-                </button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto space-y-1.5 text-xs text-[#27c93f] custom-scrollbar">
-                {terminalLogs.slice(-200).map((log, i) => (
-                  <div key={i} className="leading-relaxed whitespace-pre-wrap">{log}</div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ── TAB 6: ROADMAP ── */}
-          {activeTab === 'plan' && (
-            <div className="flex-1 p-6 overflow-y-auto bg-[#0e0e0e] space-y-4 custom-scrollbar">
-              <h2 className="text-sm font-bold text-[#ffffff] font-mono flex items-center gap-2">
-                <ListTodo className="w-4 h-4 text-[#ffffff]" /> Project Task Roadmap
-              </h2>
-              <div className="space-y-2">
-                {planItems.map((item) => (
-                  <div key={item.id} className="p-3 rounded-lg bg-[#141414] border border-[#242424] flex items-center justify-between text-xs font-mono">
-                    <span className="text-[#dddddd]">{item.title}</span>
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                      item.status === 'completed' ? 'bg-[#1a331e] text-[#27c93f]' : 'bg-[#3b2d1c] text-[#ffbd2e]'
-                    }`}>
-                      {item.status}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ── COMMAND PALETTE MODAL (Ctrl + K) ── */}
-      {showCommandPalette && (
-        <div className="fixed inset-0 bg-black/80 flex items-start justify-center pt-20 p-4 z-50">
-          <div className="bg-[#141414] border border-[#2c2c2c] rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl space-y-2">
-            <div className="p-3 border-b border-[#242424] flex items-center gap-2 bg-[#0e0e0e]">
-              <Search className="w-4 h-4 text-[#777777]" />
-              <input
-                type="text"
-                value={commandSearch}
-                onChange={(e) => setCommandSearch(e.target.value)}
-                placeholder="Search commands or actions (e.g. /goal, /test, /audit)..."
-                className="w-full bg-transparent text-xs text-[#ffffff] focus:outline-none font-mono"
-                autoFocus
-              />
-              <button onClick={() => setShowCommandPalette(false)} className="text-[#888888] hover:text-[#ffffff] text-xs font-mono">
-                ESC
-              </button>
-            </div>
-
-            <div className="p-2 max-h-80 overflow-y-auto space-y-1 custom-scrollbar">
-              {quickCommands
-                .filter((cmd) => cmd.command.toLowerCase().includes(commandSearch.toLowerCase()) || cmd.label.toLowerCase().includes(commandSearch.toLowerCase()))
-                .map((cmd) => (
-                  <div
-                    key={cmd.id}
-                    onClick={() => handleExecuteCommand(cmd)}
-                    className="p-2.5 rounded-xl hover:bg-[#222222] cursor-pointer flex items-center justify-between group transition-colors"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 rounded-lg bg-[#1c1c1c] border border-[#2b2b2b]">
-                        {cmd.icon}
-                      </div>
-                      <div>
-                        <div className="font-bold text-xs text-[#ffffff] font-mono flex items-center gap-2">
-                          {cmd.label}
-                          <span className="text-[10px] text-[#777777] font-normal">{cmd.command}</span>
-                        </div>
-                        <div className="text-[11px] text-[#888888]">{cmd.description}</div>
-                      </div>
-                    </div>
-                    <ArrowRight className="w-4 h-4 text-[#555555] group-hover:text-[#ffffff] transition-colors" />
-                  </div>
-                ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showWorkspacePicker && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              handleSwitchWorkspace();
-            }}
-            className="bg-[#141414] border border-[#262626] rounded-xl w-full max-w-lg p-5 space-y-4 text-xs font-mono shadow-2xl"
-          >
-            <div className="flex items-center justify-between pb-2 border-b border-[#242424]">
-              <div>
-                <h3 className="font-bold text-[#ffffff]">Switch Workspace</h3>
-                <p className="mt-1 text-[11px] text-[#777777]">เลือกโฟลเดอร์โปรเจกต์ที่ Alisa จะอ่านและแก้ไข</p>
-              </div>
-              <button type="button" onClick={() => setShowWorkspacePicker(false)} className="text-[#888888] hover:text-[#ffffff]">✕</button>
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="block text-[#888888]" htmlFor="workspace-path">Absolute workspace path</label>
-              <input
-                id="workspace-path"
-                type="text"
-                value={workspaceInput}
-                onChange={(event) => setWorkspaceInput(event.target.value)}
-                placeholder="C:/Users/YourName/Desktop/my-project"
-                autoFocus
-                className="w-full px-3 py-2 rounded bg-[#0a0a0a] border border-[#242424] text-[#ffffff] focus:outline-none focus:border-[#555555]"
-              />
-            </div>
-
-            {workspaceSwitchError && (
-              <div className="rounded-lg border border-[#5b2929] bg-[#241313] px-3 py-2 text-[11px] leading-relaxed text-[#ffaaa4]">
-                {workspaceSwitchError}
-              </div>
-            )}
-
-            <div className="flex justify-end gap-2 pt-2 border-t border-[#242424]">
-              <button type="button" onClick={() => setShowWorkspacePicker(false)} className="px-3 py-1.5 rounded bg-[#222222] text-[#aaaaaa] hover:text-[#ffffff]">Cancel</button>
-              <button type="submit" className="px-3 py-1.5 rounded bg-[#ffffff] text-[#0e0e0e] font-bold">Switch workspace</button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* ── Settings Modal ── */}
-      {showSettings && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
-          <div className="bg-[#141414] border border-[#262626] rounded-xl w-full max-w-md p-5 space-y-4 text-xs font-mono shadow-2xl">
-            <div className="flex items-center justify-between pb-2 border-b border-[#242424]">
-              <h3 className="font-bold text-[#ffffff]">Project Alisa Settings</h3>
-              <button onClick={() => setShowSettings(false)} className="text-[#888888] hover:text-[#ffffff]">✕</button>
-            </div>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-[#888888] mb-1">API Key</label>
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  className="w-full px-3 py-1.5 rounded bg-[#0a0a0a] border border-[#242424] text-[#ffffff] focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-[#888888] mb-1">Base URL (Gateway)</label>
-                <input
-                  type="text"
-                  value={baseURL}
-                  onChange={(e) => setBaseURL(e.target.value)}
-                  className="w-full px-3 py-1.5 rounded bg-[#0a0a0a] border border-[#242424] text-[#ffffff] focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-[#888888] mb-1">LLM Model</label>
-                <input
-                  type="text"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  className="w-full px-3 py-1.5 rounded bg-[#0a0a0a] border border-[#242424] text-[#ffffff] focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-[#888888] mb-1">Workspace Directory</label>
-                <input
-                  type="text"
-                  value={workspaceDir}
-                  onChange={(e) => setWorkspaceDir(e.target.value)}
-                  className="w-full px-3 py-1.5 rounded bg-[#0a0a0a] border border-[#242424] text-[#ffffff] focus:outline-none"
-                />
-              </div>
-            </div>
-            {settingsError && (
-              <div className="rounded-lg border border-[#5b2929] bg-[#241313] px-3 py-2 text-[11px] leading-relaxed text-[#ffaaa4]">
-                {settingsError}
-              </div>
-            )}
-            <div className="flex items-center justify-between pt-2 border-t border-[#242424]">
-              <button
-                onClick={async () => {
-                try {
-                  addTerminalLog('🔄 Checking for harness updates & pre-installed skills...');
-                    const res = await fetch(`${API_BASE}/api/update/check`);
-                    if (!res.ok) throw new Error(`Update check failed (${res.status})`);
-                    const data = await res.json();
-                    addTerminalLog(`✨ Update Status: ${data.status} (Version: ${data.version})`);
-                    alert(`Update Check: ${data.status}`);
-                    fetchSkills();
-                  } catch (err: any) {
-                    alert('Update check failed: ' + err.message);
-                  }
-                }}
-                className="px-3 py-1 rounded bg-[#1c1c1c] border border-[#2b2b2b] text-[#cccccc] hover:text-[#ffffff] transition-colors"
-              >
-                🔄 Check Updates & Skills
-              </button>
-              <div className="flex gap-2">
-                <button onClick={() => setShowSettings(false)} className="px-3 py-1 rounded bg-[#222222] text-[#aaaaaa]">Cancel</button>
-                <button onClick={handleSaveConfig} className="px-3 py-1 rounded bg-[#ffffff] text-[#0e0e0e] font-bold">Save</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {showSettings && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) setShowSettings(false); }}><form onSubmit={(event) => { event.preventDefault(); handleSaveConfig(); }} className="w-full max-w-lg rounded-2xl border border-[#3a4351] bg-[#151a21] p-5 shadow-[0_24px_70px_rgba(0,0,0,.5)] sm:p-6" role="dialog" aria-modal="true" aria-label="Project settings"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#b8a2da]">Configuration</p><h2 className="mt-1 text-lg font-semibold text-white">Project settings</h2><p className="mt-1 text-sm leading-5 text-[#8995a7]">Connect Alisa to your model gateway and workspace.</p></div><button type="button" onClick={() => setShowSettings(false)} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[#8290a3] hover:bg-[#202733] hover:text-white" aria-label="Close"><X className="h-4 w-4" /></button></div><div className="mt-6 space-y-4"><div><label htmlFor="settings-api-key" className="text-xs font-medium text-[#a9b6c8]">API key</label><input id="settings-api-key" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} className="mt-2 w-full rounded-xl border border-[#303846] bg-[#0d1015] px-3.5 py-3 text-sm text-white outline-none focus:border-[#657895]" /></div><div><label htmlFor="settings-base-url" className="text-xs font-medium text-[#a9b6c8]">Base URL</label><input id="settings-base-url" type="url" value={baseURL} onChange={(e) => setBaseURL(e.target.value)} className="mt-2 w-full rounded-xl border border-[#303846] bg-[#0d1015] px-3.5 py-3 text-sm text-white outline-none focus:border-[#657895]" /></div><div><label htmlFor="settings-model" className="text-xs font-medium text-[#a9b6c8]">Model</label><input id="settings-model" type="text" value={model} onChange={(e) => setModel(e.target.value)} className="mt-2 w-full rounded-xl border border-[#303846] bg-[#0d1015] px-3.5 py-3 text-sm text-white outline-none focus:border-[#657895]" /></div><div><label htmlFor="settings-workspace" className="text-xs font-medium text-[#a9b6c8]">Workspace directory</label><input id="settings-workspace" type="text" value={workspaceDir} onChange={(e) => setWorkspaceDir(e.target.value)} className="mt-2 w-full rounded-xl border border-[#303846] bg-[#0d1015] px-3.5 py-3 text-sm text-white outline-none focus:border-[#657895]" /></div></div>{settingsError && <div className="mt-4 rounded-xl border border-[#59343b] bg-[#27181d] px-3 py-2.5 text-xs leading-5 text-[#f0a9b1]">{settingsError}</div>}<div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-[#2b333f] pt-4"><button type="button" onClick={async () => { try { addTerminalLog('🔄 Checking for harness updates & pre-installed skills...'); const res = await fetch(`${API_BASE}/api/update/check`); if (!res.ok) throw new Error(`Update check failed (${res.status})`); const data = await res.json(); addTerminalLog(`✨ Update Status: ${data.status} (Version: ${data.version})`); window.alert(`Update Check: ${data.status}`); fetchSkills(); } catch (err: any) { window.alert(`Update check failed: ${err.message}`); } }} className="rounded-lg border border-[#303846] bg-[#1a1f27] px-3 py-2.5 text-xs font-medium text-[#a9b6c8] hover:border-[#53647b] hover:text-white">Check updates</button><div className="flex gap-2"><button type="button" onClick={() => setShowSettings(false)} className="rounded-lg border border-[#303846] bg-[#1a1f27] px-3.5 py-2.5 text-sm font-medium text-[#a9b6c8] hover:border-[#53647b] hover:text-white">Cancel</button><button type="submit" className="rounded-lg bg-[#f0f2f5] px-3.5 py-2.5 text-sm font-semibold text-[#13161b] hover:bg-white">Save changes</button></div></div></form></div>}
     </div>
   );
 }

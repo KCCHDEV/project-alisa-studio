@@ -5,6 +5,7 @@ import * as path from 'path';
 import { Agent } from '../core/agent.ts';
 import { LLMClient, type LLMConfig } from '../llm/client.ts';
 import type { Message, AgentEvent, SessionState } from '../core/types.ts';
+import { writeFileTool } from '../tools/file-ops.ts';
 
 const PORT = Number(process.env.PORT || 3001);
 const RUNTIME_DIR = process.env.ALISA_CONFIG_DIR || process.cwd();
@@ -294,6 +295,54 @@ const server = http.createServer(async (req, res) => {
     const content = fs.readFileSync(full, 'utf-8');
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ content, path: filePath }));
+    return;
+  }
+
+  if (url.pathname === '/api/files/write' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', async () => {
+      try {
+        const data = JSON.parse(body);
+        if (typeof data.path !== 'string' || !data.path.trim()) {
+          throw new Error('Missing file path');
+        }
+        if (typeof data.content !== 'string') {
+          throw new Error('File content must be text');
+        }
+
+        const requestedPath = data.path.trim();
+        const fullPath = path.isAbsolute(requestedPath)
+          ? path.resolve(requestedPath)
+          : path.resolve(currentConfig.workspaceDir, requestedPath);
+        if (!isPathInsideWorkspace(fullPath, currentConfig.workspaceDir)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'File is outside the active workspace' }));
+          return;
+        }
+        if (!fs.existsSync(fullPath) || fs.statSync(fullPath).isDirectory()) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'File not found' }));
+          return;
+        }
+
+        await writeFileTool.execute(
+          { path: requestedPath, content: data.content },
+          {
+            cwd: currentConfig.workspaceDir,
+            sessionId: 'editor',
+            env: {},
+            emitEvent: () => undefined,
+          },
+        );
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, path: requestedPath }));
+      } catch (err: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message || 'Unable to save file' }));
+      }
+    });
     return;
   }
 
