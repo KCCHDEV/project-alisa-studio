@@ -43,6 +43,10 @@ export class Agent {
     return this.status;
   }
 
+  setWorkspace(cwd: string) {
+    this.cwd = cwd;
+  }
+
   emit(event: AgentEvent) {
     this.onEvent?.(event);
   }

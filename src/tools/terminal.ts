@@ -13,7 +13,7 @@ export const TerminalInputSchema = z.object({
 
 export type TerminalInput = z.infer<typeof TerminalInputSchema>;
 
-export const terminalTool: ToolDefinition<TerminalInput, { output: string; exitCode: number; durationMs: number }> = {
+export const terminalTool: ToolDefinition<z.input<typeof TerminalInputSchema>, { output: string; exitCode: number; durationMs: number }> = {
   name: 'terminal',
   description: 'Execute shell/bash commands safely on the local machine with real-time output and timeout protection.',
   parameters: TerminalInputSchema,

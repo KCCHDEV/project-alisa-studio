@@ -10,7 +10,7 @@ export const SearchFilesInputSchema = z.object({
   max_results: z.number().optional().default(50).describe('Maximum matches to return'),
 });
 
-export const searchFilesTool: ToolDefinition<z.infer<typeof SearchFilesInputSchema>, { matches: Array<{ file: string; line: number; text: string }> }> = {
+export const searchFilesTool: ToolDefinition<z.input<typeof SearchFilesInputSchema>, { matches: Array<{ file: string; line: number; text: string }> }> = {
   name: 'search_files',
   description: 'Search for text or regex patterns across files in the workspace.',
   parameters: SearchFilesInputSchema,

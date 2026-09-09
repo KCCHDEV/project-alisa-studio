@@ -13,7 +13,7 @@ export const manageSkillTool: ToolDefinition<z.infer<typeof ManageSkillInputSche
   description: 'Discover, inspect, and load domain skills dynamically from AppData/Local/hermes/skills.',
   parameters: ManageSkillInputSchema,
   execute: async (args, context) => {
-    const userHome = process.env.USERPROFILE || process.env.HOME || 'C:\\Users\\DELLPC';
+    const userHome = process.env.USERPROFILE || process.env.HOME || process.cwd();
     const skillsBase = path.join(userHome, 'AppData', 'Local', 'hermes', 'skills');
 
     if (args.action === 'list') {

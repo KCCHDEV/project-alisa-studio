@@ -75,7 +75,11 @@ function startBackendServer() {
 
   try {
     serverProcess = fork(serverScript, [], {
-      env: { ...process.env, PORT: String(SERVER_PORT) },
+      env: {
+        ...process.env,
+        PORT: String(SERVER_PORT),
+        ALISA_CONFIG_DIR: app.getPath('userData'),
+      },
       stdio: 'inherit',
     });
 
@@ -102,7 +106,7 @@ function createWindow() {
     frame: !isMac ? false : false, // Frameless custom window header bar
     titleBarStyle: isMac ? 'hiddenInset' : undefined,
     trafficLightPosition: isMac ? { x: 14, y: 12 } : undefined,
-    title: 'Project Alisa — AI Coding & Automation Studio',
+    title: 'Project Alisa Studio — AI Coding & Automation Studio',
     icon: path.join(__dirname, '../public/avatar.png'),
     webPreferences: {
       nodeIntegration: false,

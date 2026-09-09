@@ -27,7 +27,11 @@ export class LLMClient {
   }
 
   updateConfig(config: Partial<LLMConfig>) {
-    this.config = { ...this.config, ...config };
+    this.config = {
+      ...this.config,
+      ...config,
+      ...(config.baseURL ? { baseURL: config.baseURL.replace(/\/+$/, '') } : {}),
+    };
   }
 
   getConfig(): LLMConfig {

@@ -44,6 +44,14 @@
   background: #404040;
 }
 
+.tab-scroll {
+  scrollbar-width: none;
+}
+
+.tab-scroll::-webkit-scrollbar {
+  display: none;
+}
+
 /* Custom Code Diff Styling */
 .diff-add {
   color: #4ade80;

@@ -121,39 +121,19 @@ const API_BASE = (typeof window !== 'undefined' && (window.location.protocol ===
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'chat' | 'goal' | 'editor' | 'terminal' | 'plan' | 'skills'>('chat');
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: '1',
-      role: 'assistant',
-      content: 'สวัสดีครับพี่ Hori! Ney ติดตั้งระบบ Icons, Automated Goal Engine และ Command Palette System (Ctrl+K) พร้อมใช้งานแล้วครับ 🍓🖤',
-      timestamp: Date.now() - 60000,
-      toolTraces: [
-        {
-          toolName: 'Shell',
-          toolCallId: 'call_1',
-          args: { command: 'git status' },
-          result: 'On branch main\nYour branch is up to date with \'origin/main\'.\nNothing to commit, working tree clean',
-          status: 'success'
-        },
-        {
-          toolName: 'Edit',
-          toolCallId: 'call_2',
-          args: { file: 'src/web/App.tsx', diff: '+120 -35' },
-          result: 'Successfully integrated Goal Automation & Command Palette System',
-          status: 'success'
-        }
-      ]
-    }
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputPrompt, setInputPrompt] = useState('');
-  const [status, setStatus] = useState<'idle' | 'thinking' | 'acting' | 'error' | 'done'>('idle');
-  const [statusDetail, setStatusDetail] = useState('Ready');
+  const [status, setStatus] = useState<'idle' | 'thinking' | 'acting' | 'waiting_approval' | 'self_correcting' | 'error' | 'done'>('idle');
+  const [statusDetail, setStatusDetail] = useState('Connecting to backend…');
+  const [isBackendConnected, setIsBackendConnected] = useState(false);
   
   // Workspace & Files
   const [workspaceDir, setWorkspaceDir] = useState('');
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState<string>('');
+  const [isWorkspaceLoading, setIsWorkspaceLoading] = useState(true);
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   
   // OpenClaude Skills System State
   const [skills, setSkills] = useState<SkillItem[]>([]);
@@ -253,7 +233,7 @@ export default function App() {
       id: 'c5',
       command: '/skills',
       label: 'Skill Manager',
-      description: 'จัดการเปิด-ปิดสกิลโปรเซสเซอร์ใน OpenClaude Engine',
+      description: 'จัดการเปิด-ปิดสกิลที่ Alisa ใช้ระหว่างทำงาน',
       icon: <Puzzle className="w-4 h-4 text-[#ffffff]" />,
       category: 'Engine'
     },
@@ -278,8 +258,8 @@ export default function App() {
   // Terminal Logs
   const [terminalLogs, setTerminalLogs] = useState<string[]>([
     `[${new Date().toLocaleTimeString()}] 🚀 Project Alisa Studio Initialized.`,
-    `[${new Date().toLocaleTimeString()}] 🔗 Backend API Connected at ${API_BASE || 'origin'}`,
-    `[${new Date().toLocaleTimeString()}] 🤖 Ney AI Engine Active & Ready.`
+    `[${new Date().toLocaleTimeString()}] 🔗 Starting backend connection at ${API_BASE || 'origin'}…`,
+    `[${new Date().toLocaleTimeString()}] 🤖 Alisa AI Engine ready.`
   ]);
 
   // Tasks Plan / Roadmap
@@ -293,6 +273,10 @@ export default function App() {
 
   // Settings state
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [showWorkspacePicker, setShowWorkspacePicker] = useState(false);
+  const [workspaceInput, setWorkspaceInput] = useState('');
+  const [workspaceSwitchError, setWorkspaceSwitchError] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState('');
   const [baseURL, setBaseURL] = useState('https://openrouter.ai/api/v1');
   const [model, setModel] = useState('deepseek/deepseek-chat');
@@ -304,6 +288,9 @@ export default function App() {
   
   const wsRef = useRef<WebSocket | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const activeToolTracesRef = useRef<ToolTrace[]>([]);
+  const streamingContentRef = useRef('');
+  const streamingThoughtRef = useRef('');
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -315,6 +302,10 @@ export default function App() {
       if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
         setShowCommandPalette((prev) => !prev);
+      } else if (e.key === 'Escape') {
+        setShowCommandPalette(false);
+        setShowWorkspacePicker(false);
+        setShowSettings(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -329,6 +320,8 @@ export default function App() {
           addTerminalLog('🧹 [TouchBar] Started New Chat Session.');
         } else if (eventName === 'touchbar-command-palette') {
           setShowCommandPalette((prev) => !prev);
+        } else if (eventName === 'touchbar-new-project') {
+          handleOpenWorkspacePicker();
         } else if (eventName === 'touchbar-rollback') {
           handleRollbackFile();
         }
@@ -341,9 +334,10 @@ export default function App() {
   const fetchProjectSessions = async (wsDir?: string) => {
     try {
       const res = await fetch(`${API_BASE}/api/sessions${wsDir ? `?workspace=${encodeURIComponent(wsDir)}` : ''}`);
+      if (!res.ok) throw new Error(`Session request failed (${res.status})`);
       const data = await res.json();
       if (data.messages && Array.isArray(data.messages)) {
-        setMessages(data.messages);
+        setMessages(data.messages.filter((message: ChatMessage) => message.role === 'user' || message.role === 'assistant'));
       }
     } catch (err) {
       console.error('Failed fetching project sessions:', err);
@@ -357,31 +351,62 @@ export default function App() {
     fetchSkills();
     fetchProjectSessions();
 
-    // Setup WebSocket connection to backend server
+    // Connect to the backend and retry while the server is still starting.
     const wsUrl = (API_BASE || `http://${window.location.host}`).replace(/^http/, 'ws') + '/ws';
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
+    let stopped = false;
+    let retryTimer: number | undefined;
+    let retryAttempt = 0;
 
-    ws.onopen = () => {
-      addTerminalLog('⚡ WebSocket Realtime Channel Connected.');
+    const connect = () => {
+      if (stopped) return;
+
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        retryAttempt = 0;
+        setIsBackendConnected(true);
+        setStatus('idle');
+        setStatusDetail('Backend connected');
+        addTerminalLog('⚡ Realtime channel connected.');
+        // A startup race can make the initial HTTP requests fail. Refresh once
+        // the websocket confirms that the backend is ready.
+        fetchConfig();
+        fetchWorkspaceFiles();
+        fetchSkills();
+        fetchProjectSessions();
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          handleServerEvent(data);
+        } catch (err) {
+          console.error('Failed parsing WS message:', err);
+        }
+      };
+
+      ws.onerror = () => {
+        setIsBackendConnected(false);
+      };
+
+      ws.onclose = () => {
+        setIsBackendConnected(false);
+        setStatusDetail('Backend offline');
+        if (!stopped) {
+          const delay = Math.min(1000 * 2 ** retryAttempt, 5000);
+          retryAttempt += 1;
+          retryTimer = window.setTimeout(connect, delay);
+        }
+      };
     };
 
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        handleServerEvent(data);
-      } catch (err) {
-        console.error('Failed parsing WS message:', err);
-      }
-    };
-
-    ws.onerror = (error) => {
-      console.error('WebSocket Error:', error);
-      addTerminalLog('⚠️ WebSocket Connection Warning');
-    };
+    connect();
 
     return () => {
-      ws.close();
+      stopped = true;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      if (wsRef.current) wsRef.current.close();
     };
   }, []);
 
@@ -392,6 +417,7 @@ export default function App() {
   const fetchConfig = async () => {
     try {
       const res = await fetch(`${API_BASE}/api/config`);
+      if (!res.ok) throw new Error(`Config request failed (${res.status})`);
       const data = await res.json();
       setApiKey(data.apiKey || '');
       setBaseURL(data.baseURL || 'https://openrouter.ai/api/v1');
@@ -403,8 +429,11 @@ export default function App() {
   };
 
   const fetchWorkspaceFiles = async () => {
+    setIsWorkspaceLoading(true);
+    setWorkspaceError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/files`);
+      const res = await fetch(`${API_BASE}/api/files/tree`);
+      if (!res.ok) throw new Error(`Workspace request failed (${res.status})`);
       const data = await res.json();
       if (data.files) {
         setFileTree(data.files);
@@ -414,12 +443,16 @@ export default function App() {
       }
     } catch (err) {
       console.error('Failed to fetch files:', err);
+      setWorkspaceError(err instanceof Error ? err.message : 'Unable to load workspace files');
+    } finally {
+      setIsWorkspaceLoading(false);
     }
   };
 
   const fetchSkills = async () => {
     try {
       const res = await fetch(`${API_BASE}/api/skills`);
+      if (!res.ok) throw new Error(`Skills request failed (${res.status})`);
       const data = await res.json();
       if (data.skills) {
         setSkills(data.skills);
@@ -440,6 +473,7 @@ export default function App() {
   };
 
   const handleSaveConfig = async () => {
+    setSettingsError(null);
     try {
       const res = await fetch(`${API_BASE}/api/config`, {
         method: 'POST',
@@ -447,13 +481,53 @@ export default function App() {
         body: JSON.stringify({ apiKey, baseURL, model, workspaceDir }),
       });
       const data = await res.json();
-      if (data.success) {
-        setShowSettings(false);
-        fetchWorkspaceFiles();
-        addTerminalLog(`⚙️ Config Saved: ${model}`);
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || `Settings request failed (${res.status})`);
       }
+      setShowSettings(false);
+      fetchWorkspaceFiles();
+      addTerminalLog(`⚙️ Config Saved: ${model}`);
     } catch (err) {
       console.error('Failed to save config:', err);
+      setSettingsError(err instanceof Error ? err.message : 'Unable to save settings');
+    }
+  };
+
+  const handleOpenWorkspacePicker = () => {
+    setWorkspaceInput(workspaceDir);
+    setWorkspaceSwitchError(null);
+    setShowWorkspacePicker(true);
+  };
+
+  const handleSwitchWorkspace = async () => {
+    const requestedWorkspace = workspaceInput.trim();
+    if (!requestedWorkspace) {
+      setWorkspaceSwitchError('Enter an absolute workspace path.');
+      return;
+    }
+
+    setWorkspaceSwitchError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspaceDir: requestedWorkspace }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || `Workspace request failed (${res.status})`);
+      }
+
+      const nextWorkspace = data.config.workspaceDir;
+      setWorkspaceDir(nextWorkspace);
+      setSelectedFile(null);
+      setFileContent('');
+      setShowWorkspacePicker(false);
+      fetchWorkspaceFiles();
+      fetchProjectSessions(nextWorkspace);
+      addTerminalLog(`📂 Switched project workspace to: ${nextWorkspace}`);
+    } catch (err) {
+      setWorkspaceSwitchError(err instanceof Error ? err.message : 'Unable to switch workspace');
     }
   };
 
@@ -461,7 +535,8 @@ export default function App() {
     setSelectedFile(filePath);
     setActiveTab('editor');
     try {
-      const res = await fetch(`${API_BASE}/api/file?path=${encodeURIComponent(filePath)}`);
+      const res = await fetch(`${API_BASE}/api/files/read?path=${encodeURIComponent(filePath)}`);
+      if (!res.ok) throw new Error(`File request failed (${res.status})`);
       const data = await res.json();
       if (data.content !== undefined) {
         setFileContent(data.content);
@@ -473,12 +548,59 @@ export default function App() {
   };
 
   const handleServerEvent = (data: any) => {
+    const appendServerMessage = (message: any) => {
+      if (!message || (message.role !== 'user' && message.role !== 'assistant')) return;
+
+      const chatMessage: ChatMessage = {
+        id: message.id || `message_${Date.now()}`,
+        role: message.role,
+        content: message.content || '',
+        thought: message.metadata?.thought,
+        timestamp: message.timestamp || Date.now(),
+        toolTraces: message.role === 'assistant' && activeToolTracesRef.current.length > 0
+          ? [...activeToolTracesRef.current]
+          : undefined,
+      };
+
+      if (chatMessage.role === 'assistant' && !chatMessage.content && !chatMessage.thought) return;
+
+      setMessages((prev) => {
+        if (prev.some((item) => item.id === chatMessage.id)) return prev;
+        if (chatMessage.role === 'user' && prev.some((item) =>
+          item.role === 'user' && item.content === chatMessage.content && Date.now() - item.timestamp < 10000
+        )) return prev;
+        return [...prev, chatMessage];
+      });
+
+      if (chatMessage.role === 'assistant') {
+        setStreamingContent('');
+        setStreamingThought('');
+        streamingContentRef.current = '';
+        streamingThoughtRef.current = '';
+        setActiveToolTraces([]);
+        activeToolTracesRef.current = [];
+      }
+    };
+
+    const setToolTraces = (updater: (traces: ToolTrace[]) => ToolTrace[]) => {
+      setActiveToolTraces((prev) => {
+        const next = updater(prev);
+        activeToolTracesRef.current = next;
+        return next;
+      });
+    };
+
     switch (data.type) {
       case 'status':
+      case 'status_change':
         setStatus(data.status);
         if (data.detail) {
           setStatusDetail(data.detail);
           addTerminalLog(`📌 Status: ${data.detail}`);
+        } else if (data.status === 'idle') {
+          setStatusDetail('Ready');
+        } else if (data.status === 'done') {
+          setStatusDetail('Completed');
         }
         window.electronAPI?.updateTouchBarStatus?.({
           status: data.status,
@@ -487,15 +609,24 @@ export default function App() {
         break;
 
       case 'token':
-        setStreamingContent((prev) => prev + data.token);
+      case 'token_stream': {
+        const delta = data.delta ?? data.token ?? '';
+        streamingContentRef.current += delta;
+        setStreamingContent(streamingContentRef.current);
         break;
+      }
 
       case 'thought':
-        setStreamingThought((prev) => prev + data.thought);
+      case 'thought_stream': {
+        const delta = data.delta ?? data.thought ?? '';
+        streamingThoughtRef.current += delta;
+        setStreamingThought(streamingThoughtRef.current);
         break;
+      }
 
       case 'tool_start':
-        setActiveToolTraces((prev) => [
+      case 'tool_call_start':
+        setToolTraces((prev) => [
           ...prev,
           {
             toolName: data.toolName,
@@ -512,10 +643,11 @@ export default function App() {
         break;
 
       case 'tool_end':
-        setActiveToolTraces((prev) =>
+      case 'tool_call_end':
+        setToolTraces((prev) =>
           prev.map((t) =>
             t.toolCallId === data.toolCallId
-              ? { ...t, status: 'success', result: data.result }
+              ? { ...t, status: data.error ? 'error' : 'success', result: data.result, error: data.error }
               : t
           )
         );
@@ -527,21 +659,24 @@ export default function App() {
         });
         break;
 
+      case 'message_added':
+        appendServerMessage(data.message);
+        break;
+
       case 'turn_complete':
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: Date.now().toString(),
-            role: 'assistant',
-            content: data.result?.content || streamingContent,
-            thought: streamingThought,
-            timestamp: Date.now(),
-            toolTraces: activeToolTraces,
-          },
-        ]);
+        appendServerMessage({
+          id: `turn_${Date.now()}`,
+          role: 'assistant',
+          content: data.result?.content || streamingContentRef.current,
+          metadata: { thought: streamingThoughtRef.current },
+          timestamp: Date.now(),
+        });
         setStreamingContent('');
         setStreamingThought('');
+        streamingContentRef.current = '';
+        streamingThoughtRef.current = '';
         setActiveToolTraces([]);
+        activeToolTracesRef.current = [];
         setStatus('idle');
         window.electronAPI?.updateTouchBarStatus?.({
           status: 'idle',
@@ -551,6 +686,7 @@ export default function App() {
 
       case 'error':
         setStatus('error');
+        setStatusDetail(data.message || 'Request failed');
         addTerminalLog(`❌ Server Error: ${data.message}`);
         window.electronAPI?.updateTouchBarStatus?.({
           status: 'error',
@@ -562,7 +698,14 @@ export default function App() {
   };
 
   const handleSendPrompt = () => {
-    if (!inputPrompt.trim() || status === 'thinking' || status === 'acting') return;
+    if (!inputPrompt.trim() || status === 'thinking' || status === 'acting' || status === 'waiting_approval' || status === 'self_correcting') return;
+
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      setStatus('error');
+      setStatusDetail('Backend offline');
+      addTerminalLog('⚠️ Cannot send command while the backend is offline.');
+      return;
+    }
 
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
@@ -581,17 +724,13 @@ export default function App() {
 
     addTerminalLog(`💬 User: ${inputPrompt}`);
 
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'prompt',
-          prompt: inputPrompt,
-          skills: activeSkillNames,
-        })
-      );
-    } else {
-      addTerminalLog('⚠️ Offline mode: Sending prompt via API fallback');
-    }
+    wsRef.current.send(
+      JSON.stringify({
+        type: 'start_task',
+        prompt: inputPrompt,
+        skills: activeSkillNames,
+      })
+    );
 
     setInputPrompt('');
   };
@@ -600,10 +739,11 @@ export default function App() {
     try {
       addTerminalLog('🔄 กำลังทำการ Rollback การแก้ไขไฟล์ล่าสุด...');
       const res = await fetch(`${API_BASE}/api/rollback`, { method: 'POST' });
+      if (!res.ok) throw new Error(`Rollback request failed (${res.status})`);
       const data = await res.json();
       if (data.success) {
         addTerminalLog(`✅ ${data.message}`);
-        fetchFiles();
+        fetchWorkspaceFiles();
       } else {
         addTerminalLog(`⚠️ ${data.message}`);
       }
@@ -688,6 +828,54 @@ export default function App() {
 
   const completedStepsCount = goalSteps.filter((s) => s.status === 'completed').length;
   const goalProgressPct = Math.round((completedStepsCount / goalSteps.length) * 100);
+  const statusLabel = status === 'thinking'
+    ? '⚡ Thinking…'
+    : status === 'acting'
+    ? '⚙️ Executing…'
+    : status === 'waiting_approval'
+    ? '⏸ Waiting for approval…'
+    : status === 'self_correcting'
+    ? '🔧 Self-correcting…'
+    : status === 'error'
+    ? '⚠️ Error'
+    : status === 'done'
+    ? '✓ Completed'
+    : isBackendConnected
+    ? '🍓 Alisa: Ready'
+    : statusDetail === 'Backend offline'
+    ? '⚠️ Backend offline'
+    : '⏳ Connecting…';
+  const statusColor = status === 'error'
+    ? 'text-[#ff8a80]'
+    : status === 'thinking'
+    ? 'text-[#ffaa00]'
+    : status === 'acting'
+    ? 'text-[#38bdf8]'
+    : status === 'waiting_approval'
+    ? 'text-[#ffbd2e]'
+    : status === 'self_correcting'
+    ? 'text-[#c084fc]'
+    : !isBackendConnected
+    ? 'text-[#ffbd2e]'
+    : 'text-[#7ee787]';
+  const statusDot = status === 'error'
+    ? 'bg-[#ff5f56]'
+    : status === 'thinking'
+    ? 'bg-[#ffaa00] animate-ping'
+    : status === 'acting'
+    ? 'bg-[#38bdf8] animate-pulse'
+    : status === 'waiting_approval'
+    ? 'bg-[#ffbd2e] animate-pulse'
+    : status === 'self_correcting'
+    ? 'bg-[#c084fc] animate-pulse'
+    : !isBackendConnected
+    ? 'bg-[#ffbd2e]'
+    : 'bg-[#27c93f]';
+  const visibleStatusDetail = statusDetail
+    && !['Ready', 'Backend connected', 'Backend offline', 'Connecting to backend…'].includes(statusDetail)
+    && !statusDetail.startsWith('Ready. Workspace:')
+    ? statusDetail
+    : '';
 
   return (
     <div className="flex flex-col h-screen bg-[#0e0e0e] text-[#e0e0e0] font-sans overflow-hidden select-none">
@@ -734,16 +922,16 @@ export default function App() {
         {/* Center Title & Live Agent Status Pill (Persistent 24/7) */}
         <div className="hidden md:flex items-center gap-3 font-mono text-xs">
           <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-[#181818] border border-[#2a2a2a] shadow-inner">
-            <span className={`w-2 h-2 rounded-full ${status === 'thinking' ? 'bg-[#ffaa00] animate-ping' : status === 'acting' ? 'bg-[#38bdf8] animate-pulse' : 'bg-[#27c93f]'}`} />
-            <span className={`text-[11px] font-semibold ${status === 'thinking' ? 'text-[#ffaa00]' : status === 'acting' ? 'text-[#38bdf8]' : 'text-[#27c93f]'}`}>
-              {status === 'thinking' ? '⚡ Thinking...' : status === 'acting' ? '⚙️ Executing...' : '🍓 Alisa: Ready'}
+            <span className={`w-2 h-2 rounded-full ${statusDot}`} />
+            <span className={`text-[11px] font-semibold ${statusColor}`}>
+              {statusLabel}
             </span>
-            {statusDetail && (
-              <span className="text-[#777777] text-[10px] truncate max-w-[150px]">| {statusDetail}</span>
+            {visibleStatusDetail && (
+              <span className="text-[#777777] text-[10px] truncate max-w-[180px]">| {visibleStatusDetail}</span>
             )}
           </div>
           <span className="text-[#444444]">•</span>
-          <span className="text-[#888888] truncate max-w-[180px]">{workspaceDir || 'ichigo-agent'}</span>
+          <span className="hidden xl:inline text-[#888888] truncate max-w-[180px]">{workspaceDir || 'Project workspace'}</span>
         </div>
 
         {/* Right Status & Actions */}
@@ -756,44 +944,24 @@ export default function App() {
               setMessages([]);
               addTerminalLog('🧹 Started New Chat Session.');
             }}
-            className="flex items-center gap-1 px-2 py-1 rounded bg-[#1c1c1c] border border-[#2b2b2b] text-[11px] font-mono text-[#aaaaaa] hover:text-[#ffffff] hover:border-[#444444] transition-all"
+            className="flex items-center gap-1 px-2 py-1 rounded bg-[#1c1c1c] border border-[#2b2b2b] text-[11px] font-mono whitespace-nowrap text-[#aaaaaa] hover:text-[#ffffff] hover:border-[#444444] transition-all"
             title="New Chat Session"
           >
             <span>+ New Chat</span>
           </button>
 
           <button
-            onClick={async () => {
-              const newPath = prompt('Enter absolute path for new project workspace:', workspaceDir || 'C:/Users/DELLPC/Desktop');
-              if (!newPath) return;
-              try {
-                const res = await fetch(`${API_BASE}/api/config`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ workspaceDir: newPath }),
-                });
-                const data = await res.json();
-                if (data.success) {
-                  setWorkspaceDir(data.config.workspaceDir);
-                  fetchWorkspaceFiles();
-                  fetchProjectSessions(data.config.workspaceDir);
-                  addTerminalLog(`📂 Switched project workspace to: ${data.config.workspaceDir}`);
-                } else {
-                  alert('Failed to switch workspace: ' + (data.error || 'Invalid path'));
-                }
-              } catch (err: any) {
-                alert('Error switching workspace: ' + err.message);
-              }
-            }}
-            className="flex items-center gap-1 px-2 py-1 rounded bg-[#1c1c1c] border border-[#2b2b2b] text-[11px] font-mono text-[#aaaaaa] hover:text-[#ffffff] hover:border-[#444444] transition-all"
-            title="Open / Switch Project Workspace"
+            disabled={status === 'thinking' || status === 'acting' || status === 'waiting_approval' || status === 'self_correcting'}
+            onClick={handleOpenWorkspacePicker}
+            className="flex items-center gap-1 px-2 py-1 rounded bg-[#1c1c1c] border border-[#2b2b2b] text-[11px] font-mono whitespace-nowrap text-[#aaaaaa] hover:text-[#ffffff] hover:border-[#444444] disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+            title="Switch project workspace"
           >
-            <span>📂 New Project</span>
+            <span>📂 Workspace</span>
           </button>
 
           <button
             onClick={() => setShowCommandPalette(true)}
-            className="flex items-center gap-1.5 px-2 py-1 rounded bg-[#1c1c1c] border border-[#2b2b2b] text-[11px] font-mono text-[#aaaaaa] hover:text-[#ffffff] hover:border-[#444444] transition-all"
+            className="flex items-center gap-1.5 px-2 py-1 rounded bg-[#1c1c1c] border border-[#2b2b2b] text-[11px] font-mono whitespace-nowrap text-[#aaaaaa] hover:text-[#ffffff] hover:border-[#444444] transition-all"
             title="Command Palette (Ctrl+K)"
           >
             <Command className="w-3 h-3 text-[#ffffff]" />
@@ -802,12 +970,15 @@ export default function App() {
           </button>
 
           <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#1a1a1a] border border-[#262626] text-[11px] font-mono text-[#888888]">
-            <div className={`w-2 h-2 rounded-full ${status === 'acting' || status === 'thinking' ? 'bg-[#27c93f] animate-pulse' : 'bg-[#777777]'}`} />
+            <div className={`w-2 h-2 rounded-full ${status === 'acting' || status === 'thinking' || status === 'waiting_approval' || status === 'self_correcting' ? 'bg-[#27c93f] animate-pulse' : 'bg-[#777777]'}`} />
             <span className="text-[#cccccc] text-[10px]">{model.split('/')[1] || model}</span>
           </div>
 
           <button
-            onClick={() => setShowSettings(true)}
+            onClick={() => {
+              setSettingsError(null);
+              setShowSettings(true);
+            }}
             className="p-1 rounded text-[#888888] hover:text-[#ffffff] hover:bg-[#242424] transition-colors"
             title="Settings"
           >
@@ -832,22 +1003,36 @@ export default function App() {
           <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
             {fileTree.length > 0 ? (
               renderFileTree(fileTree)
+            ) : isWorkspaceLoading ? (
+              <div className="text-xs text-[#777777] p-3 font-mono italic">
+                Loading workspace files…
+              </div>
+            ) : workspaceError ? (
+              <div className="p-3 space-y-2">
+                <div className="text-xs text-[#ff8a80] leading-relaxed">{workspaceError}</div>
+                <button
+                  onClick={fetchWorkspaceFiles}
+                  className="text-[11px] text-[#cccccc] hover:text-white underline underline-offset-2"
+                >
+                  Try again
+                </button>
+              </div>
             ) : (
-              <div className="text-xs text-[#666666] p-3 font-mono italic">
-                Loading workspace files...
+              <div className="text-xs text-[#777777] p-3 font-mono italic">
+                This workspace has no visible files.
               </div>
             )}
           </div>
         </div>
 
         {/* ── Center Main Editor / Chat Panel ── */}
-        <div className="flex-1 flex flex-col bg-[#0e0e0e] overflow-hidden">
+        <div className="min-w-0 flex-1 flex flex-col bg-[#0e0e0e] overflow-hidden">
           {/* Top Tab Bar Navigation */}
-          <div className="h-10 bg-[#141414] border-b border-[#242424] px-4 flex items-center justify-between shrink-0">
-            <div className="flex items-center space-x-1">
+          <div className="min-w-0 h-10 bg-[#141414] border-b border-[#242424] px-3 flex items-center justify-between shrink-0">
+            <div className="tab-scroll min-w-0 flex items-center space-x-1 overflow-x-auto">
               <button
                 onClick={() => setActiveTab('chat')}
-                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-mono transition-colors rounded ${
+                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-mono whitespace-nowrap shrink-0 transition-colors rounded ${
                   activeTab === 'chat' ? 'bg-[#242424] text-[#ffffff] font-semibold' : 'text-[#888888] hover:text-[#cccccc]'
                 }`}
               >
@@ -856,7 +1041,7 @@ export default function App() {
 
               <button
                 onClick={() => setActiveTab('goal')}
-                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-mono transition-colors rounded ${
+                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-mono whitespace-nowrap shrink-0 transition-colors rounded ${
                   activeTab === 'goal' ? 'bg-[#242424] text-[#27c93f] font-semibold' : 'text-[#888888] hover:text-[#cccccc]'
                 }`}
               >
@@ -865,7 +1050,7 @@ export default function App() {
 
               <button
                 onClick={() => setActiveTab('skills')}
-                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-mono transition-colors rounded ${
+                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-mono whitespace-nowrap shrink-0 transition-colors rounded ${
                   activeTab === 'skills' ? 'bg-[#242424] text-[#ffffff] font-semibold' : 'text-[#888888] hover:text-[#cccccc]'
                 }`}
               >
@@ -874,7 +1059,7 @@ export default function App() {
 
               <button
                 onClick={() => setActiveTab('editor')}
-                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-mono transition-colors rounded ${
+                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-mono whitespace-nowrap shrink-0 transition-colors rounded ${
                   activeTab === 'editor' ? 'bg-[#242424] text-[#ffffff] font-semibold' : 'text-[#888888] hover:text-[#cccccc]'
                 }`}
               >
@@ -883,7 +1068,7 @@ export default function App() {
 
               <button
                 onClick={() => setActiveTab('terminal')}
-                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-mono transition-colors rounded ${
+                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-mono whitespace-nowrap shrink-0 transition-colors rounded ${
                   activeTab === 'terminal' ? 'bg-[#242424] text-[#ffffff] font-semibold' : 'text-[#888888] hover:text-[#cccccc]'
                 }`}
               >
@@ -892,7 +1077,7 @@ export default function App() {
 
               <button
                 onClick={() => setActiveTab('plan')}
-                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-mono transition-colors rounded ${
+                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-mono whitespace-nowrap shrink-0 transition-colors rounded ${
                   activeTab === 'plan' ? 'bg-[#242424] text-[#ffffff] font-semibold' : 'text-[#888888] hover:text-[#cccccc]'
                 }`}
               >
@@ -900,9 +1085,13 @@ export default function App() {
               </button>
             </div>
 
-            {/* Gateway Indicator */}
-            <div className="flex items-center gap-2 text-xs font-mono">
-              <span className="text-[#666666] text-[10px]">OmniRoute Active</span>
+            <div className={`hidden lg:flex items-center gap-2 text-[10px] font-mono px-2 py-1 rounded-full border ${
+              isBackendConnected
+                ? 'text-[#7ee787] border-[#214d2b] bg-[#122218]'
+                : 'text-[#ffbd2e] border-[#4a3b1a] bg-[#211c10]'
+            }`} title={isBackendConnected ? 'Backend connected' : 'Backend offline'}>
+              <span className={`w-1.5 h-1.5 rounded-full ${isBackendConnected ? 'bg-[#27c93f]' : 'bg-[#ffbd2e]'}`} />
+              {isBackendConnected ? 'Backend connected' : 'Backend offline'}
             </div>
           </div>
 
@@ -910,12 +1099,41 @@ export default function App() {
           {activeTab === 'chat' && (
             <div className="flex-1 flex flex-col overflow-hidden">
               <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+                {messages.length === 0 && !streamingContent && activeToolTraces.length === 0 && (
+                  <div className="h-full min-h-[280px] flex items-center justify-center px-6">
+                    <div className="w-full max-w-xl text-center">
+                      <div className="mx-auto mb-4 w-12 h-12 rounded-2xl bg-[#f4f4f4] text-[#101010] flex items-center justify-center text-xl font-bold shadow-lg shadow-black/20">
+                        A
+                      </div>
+                      <h1 className="text-xl font-semibold tracking-tight text-white">Project Alisa Studio</h1>
+                      <p className="mt-2 text-sm leading-relaxed text-[#8f8f8f]">
+                        Ask the agent to inspect, explain, or change the code in your workspace.
+                      </p>
+                      <div className="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-2 text-left">
+                        {[
+                          ['Inspect this project', 'สรุปโครงสร้างโปรเจกต์'],
+                          ['Find a bug', 'วิเคราะห์บั๊กให้หน่อย'],
+                          ['Improve a file', 'ปรับปรุงไฟล์นี้ให้ดีขึ้น'],
+                        ].map(([label, prompt]) => (
+                          <button
+                            key={label}
+                            onClick={() => setInputPrompt(prompt)}
+                            className="rounded-xl border border-[#2b2b2b] bg-[#151515] px-3 py-3 text-left transition-colors hover:border-[#555555] hover:bg-[#1b1b1b]"
+                          >
+                            <div className="text-xs font-medium text-[#e5e5e5]">{label}</div>
+                            <div className="mt-1 text-[11px] text-[#777777]">{prompt}</div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
                 {messages.map((m) => (
                   <div key={m.id} className="space-y-2">
                     {/* User Prompt Bubble */}
                     {m.role === 'user' && (
                       <div className="flex justify-end">
-                        <div className="bg-[#242424] text-[#ffffff] px-4 py-2.5 rounded-2xl rounded-tr-none text-xs max-w-2xl font-sans border border-[#333333] shadow-md">
+                        <div className="bg-[#242424] text-[#ffffff] px-4 py-2.5 rounded-2xl rounded-tr-none text-sm max-w-2xl font-sans border border-[#333333] shadow-md">
                           {m.content}
                         </div>
                       </div>
@@ -962,7 +1180,7 @@ export default function App() {
                         )}
 
                         {/* Assistant Final Content Output */}
-                        <div className="bg-[#121212] border border-[#242424] rounded-2xl rounded-tl-none p-4 text-xs font-sans text-[#e0e0e0] leading-relaxed space-y-2 shadow-lg">
+                        <div className="bg-[#121212] border border-[#242424] rounded-2xl rounded-tl-none p-4 text-sm font-sans text-[#e0e0e0] leading-relaxed space-y-2 shadow-lg">
                           <div className="whitespace-pre-wrap">{m.content}</div>
                         </div>
                       </div>
@@ -988,7 +1206,7 @@ export default function App() {
                     ))}
 
                     {streamingContent && (
-                      <div className="bg-[#121212] border border-[#242424] rounded-2xl rounded-tl-none p-4 text-xs font-sans text-[#e0e0e0] whitespace-pre-wrap">
+                      <div className="bg-[#121212] border border-[#242424] rounded-2xl rounded-tl-none p-4 text-sm font-sans text-[#e0e0e0] whitespace-pre-wrap">
                         {streamingContent}
                       </div>
                     )}
@@ -1002,7 +1220,7 @@ export default function App() {
               <div className="p-4 bg-[#121212] border-t border-[#242424] shrink-0">
                 <div className="bg-[#181818] border border-[#262626] rounded-xl p-3 space-y-2.5 focus-within:border-[#444444] transition-all shadow-inner">
                   <textarea
-                    rows={2}
+                    rows={3}
                     value={inputPrompt}
                     onChange={(e) => setInputPrompt(e.target.value)}
                     onKeyDown={(e) => {
@@ -1033,7 +1251,7 @@ export default function App() {
                       <span className="text-[10px] text-[#666666] font-mono hidden sm:inline">Press Enter to Send</span>
                       <button
                         onClick={handleSendPrompt}
-                        disabled={!inputPrompt.trim() || status === 'thinking' || status === 'acting'}
+                        disabled={!inputPrompt.trim() || status === 'thinking' || status === 'acting' || status === 'waiting_approval' || status === 'self_correcting'}
                         className="px-3.5 py-1.5 rounded-lg bg-[#ffffff] text-[#0e0e0e] hover:bg-[#e0e0e0] font-bold text-xs disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center gap-1.5"
                       >
                         <Send className="w-3 h-3" /> ส่งคำสั่ง
@@ -1044,7 +1262,7 @@ export default function App() {
 
                 {/* Mandatory Safety Notice */}
                 <div className="text-center mt-2.5 text-[10px] text-[#666666] font-sans">
-                  Alisa เป็นเพียง AI ที่อาจทำงานผิดได้ โปรตรวจสอบคำตอบทุกครั้ง
+                  Alisa เป็นเพียง AI ที่อาจทำงานผิดได้ โปรดตรวจสอบคำตอบทุกครั้ง
                 </div>
               </div>
             </div>
@@ -1143,9 +1361,9 @@ export default function App() {
               <div className="flex items-center justify-between pb-3 border-b border-[#242424]">
                 <div>
                   <h2 className="text-sm font-bold text-[#ffffff] font-mono flex items-center gap-2">
-                    <Puzzle className="w-4 h-4 text-[#ffbd2e]" /> OpenClaude Dynamic Skill Engine
+                    <Puzzle className="w-4 h-4 text-[#ffbd2e]" /> Agent Skills
                   </h2>
-                  <p className="text-xs text-[#888888]">ระบบคลังสกิลประยุกต์อัตโนมัติ (Automated Procedural Memory & Skill Chains)</p>
+                  <p className="text-xs text-[#888888]">เปิดใช้ความสามารถที่ Alisa ควรใช้กับงานใน session นี้</p>
                 </div>
                 <button
                   onClick={fetchSkills}
@@ -1310,6 +1528,50 @@ export default function App() {
         </div>
       )}
 
+      {showWorkspacePicker && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              handleSwitchWorkspace();
+            }}
+            className="bg-[#141414] border border-[#262626] rounded-xl w-full max-w-lg p-5 space-y-4 text-xs font-mono shadow-2xl"
+          >
+            <div className="flex items-center justify-between pb-2 border-b border-[#242424]">
+              <div>
+                <h3 className="font-bold text-[#ffffff]">Switch Workspace</h3>
+                <p className="mt-1 text-[11px] text-[#777777]">เลือกโฟลเดอร์โปรเจกต์ที่ Alisa จะอ่านและแก้ไข</p>
+              </div>
+              <button type="button" onClick={() => setShowWorkspacePicker(false)} className="text-[#888888] hover:text-[#ffffff]">✕</button>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block text-[#888888]" htmlFor="workspace-path">Absolute workspace path</label>
+              <input
+                id="workspace-path"
+                type="text"
+                value={workspaceInput}
+                onChange={(event) => setWorkspaceInput(event.target.value)}
+                placeholder="C:/Users/YourName/Desktop/my-project"
+                autoFocus
+                className="w-full px-3 py-2 rounded bg-[#0a0a0a] border border-[#242424] text-[#ffffff] focus:outline-none focus:border-[#555555]"
+              />
+            </div>
+
+            {workspaceSwitchError && (
+              <div className="rounded-lg border border-[#5b2929] bg-[#241313] px-3 py-2 text-[11px] leading-relaxed text-[#ffaaa4]">
+                {workspaceSwitchError}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-[#242424]">
+              <button type="button" onClick={() => setShowWorkspacePicker(false)} className="px-3 py-1.5 rounded bg-[#222222] text-[#aaaaaa] hover:text-[#ffffff]">Cancel</button>
+              <button type="submit" className="px-3 py-1.5 rounded bg-[#ffffff] text-[#0e0e0e] font-bold">Switch workspace</button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {/* ── Settings Modal ── */}
       {showSettings && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
@@ -1356,12 +1618,18 @@ export default function App() {
                 />
               </div>
             </div>
+            {settingsError && (
+              <div className="rounded-lg border border-[#5b2929] bg-[#241313] px-3 py-2 text-[11px] leading-relaxed text-[#ffaaa4]">
+                {settingsError}
+              </div>
+            )}
             <div className="flex items-center justify-between pt-2 border-t border-[#242424]">
               <button
                 onClick={async () => {
-                  try {
-                    addTerminalLog('🔄 Checking for harness updates & pre-installed skills...');
+                try {
+                  addTerminalLog('🔄 Checking for harness updates & pre-installed skills...');
                     const res = await fetch(`${API_BASE}/api/update/check`);
+                    if (!res.ok) throw new Error(`Update check failed (${res.status})`);
                     const data = await res.json();
                     addTerminalLog(`✨ Update Status: ${data.status} (Version: ${data.version})`);
                     alert(`Update Check: ${data.status}`);

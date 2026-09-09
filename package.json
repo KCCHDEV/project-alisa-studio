@@ -1,7 +1,7 @@
 {
   "name": "project-alisa",
   "version": "1.0.0",
-  "description": "Project Alisa — Personal AI Coding & Automation Harness",
+  "description": "Project Alisa Studio — Personal AI Coding & Automation Harness",
   "type": "module",
   "main": "dist-electron/main.cjs",
   "scripts": {
@@ -18,7 +18,8 @@
     "preview": "vite preview",
     "server": "bun run src/server/index.ts",
     "cli": "bun run src/cli/index.ts",
-    "start": "bun run src/server/index.ts & vite"
+    "start": "concurrently -k \"bun run src/server/index.ts\" \"bun run dev\"",
+    "start:electron": "bun run build && electron ."
   },
   "dependencies": {
     "clsx": "^2.1.1",
@@ -47,7 +48,7 @@
   },
   "build": {
     "appId": "com.project.alisa",
-    "productName": "Project Alisa",
+    "productName": "Project Alisa Studio",
     "directories": {
       "output": "release"
     },

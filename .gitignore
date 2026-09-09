@@ -13,8 +13,8 @@ yarn-error.log*
 
 # Environment & Secrets
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 *.pem
 *.key
 
@@ -33,11 +33,9 @@ builder-debug.yml
 # Temporary sessions
 .alisa-sessions/temp_*
 
-# Local credentials and private runtime data
-.env.*
-!.env.example
-.ichigo-config.json
-config.json
+# Local runtime state and credentials
+/.ichigo-config.json
+/config.json
 .ichigo-sessions/
 .alisa-sessions/
 .ichigo-snapshots/

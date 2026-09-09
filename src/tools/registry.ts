@@ -1,4 +1,3 @@
-import { zodToJsonSchema } from 'zod-to-json-schema';
 import type { ToolDefinition } from '../core/types.ts';
 import { terminalTool } from './terminal.ts';
 import { readFileTool, writeFileTool, patchFileTool, listDirTool } from './file-ops.ts';

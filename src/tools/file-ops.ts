@@ -6,13 +6,16 @@ import { ASTSecurityGatekeeper } from '../core/security.ts';
 import { FileTransactionManager } from '../core/snapshot.ts';
 
 const gatekeeper = new ASTSecurityGatekeeper();
-let transactionManager: FileTransactionManager | null = null;
+const transactionManagers = new Map<string, FileTransactionManager>();
 
 function getTxManager(cwd: string) {
-  if (!transactionManager) {
-    transactionManager = new FileTransactionManager(cwd);
+  const workspace = path.resolve(cwd);
+  let manager = transactionManagers.get(workspace);
+  if (!manager) {
+    manager = new FileTransactionManager(workspace);
+    transactionManagers.set(workspace, manager);
   }
-  return transactionManager;
+  return manager;
 }
 
 export { getTxManager };
@@ -24,7 +27,7 @@ export const ReadFileInputSchema = z.object({
   limit: z.number().optional().default(2000).describe('Max lines to read'),
 });
 
-export const readFileTool: ToolDefinition<z.infer<typeof ReadFileInputSchema>, { content: string; totalLines: number }> = {
+export const readFileTool: ToolDefinition<z.input<typeof ReadFileInputSchema>, { content: string; totalLines: number }> = {
   name: 'read_file',
   description: 'Read a text file with line numbers and optional pagination.',
   parameters: ReadFileInputSchema,
@@ -96,7 +99,7 @@ export const PatchFileInputSchema = z.object({
   replace_all: z.boolean().optional().default(false).describe('Replace all occurrences (default false)'),
 });
 
-export const patchFileTool: ToolDefinition<z.infer<typeof PatchFileInputSchema>, { success: boolean; diffSummary: string }> = {
+export const patchFileTool: ToolDefinition<z.input<typeof PatchFileInputSchema>, { success: boolean; diffSummary: string }> = {
   name: 'patch_file',
   description: 'Perform targeted find-and-replace edits on a file without rewriting the whole content.',
   parameters: PatchFileInputSchema,
@@ -179,7 +182,7 @@ export const ListDirInputSchema = z.object({
   max_depth: z.number().optional().default(2).describe('Max recursion depth'),
 });
 
-export const listDirTool: ToolDefinition<z.infer<typeof ListDirInputSchema>, { entries: Array<{ name: string; isDirectory: boolean; size: number }> }> = {
+export const listDirTool: ToolDefinition<z.input<typeof ListDirInputSchema>, { entries: Array<{ name: string; isDirectory: boolean; size: number }> }> = {
   name: 'list_directory',
   description: 'List files and subdirectories in a directory with file sizes and directory flags.',
   parameters: ListDirInputSchema,

@@ -6,11 +6,15 @@ import { Agent } from '../core/agent.ts';
 import { LLMClient, type LLMConfig } from '../llm/client.ts';
 import type { Message, AgentEvent, SessionState } from '../core/types.ts';
 
-const PORT = 3001;
-const CONFIG_FILE = path.join(process.cwd(), '.ichigo-config.json');
-const SESSIONS_DIR = path.join(process.cwd(), '.ichigo-sessions');
-const ALISA_SESSIONS_DIR = path.join(process.cwd(), '.alisa-sessions');
+const PORT = Number(process.env.PORT || 3001);
+const RUNTIME_DIR = process.env.ALISA_CONFIG_DIR || process.cwd();
+const CONFIG_FILE = path.join(RUNTIME_DIR, '.ichigo-config.json');
+const SESSIONS_DIR = path.join(RUNTIME_DIR, '.ichigo-sessions');
+const ALISA_SESSIONS_DIR = path.join(RUNTIME_DIR, '.alisa-sessions');
 
+if (!fs.existsSync(RUNTIME_DIR)) {
+  fs.mkdirSync(RUNTIME_DIR, { recursive: true });
+}
 if (!fs.existsSync(SESSIONS_DIR)) {
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 }
@@ -24,7 +28,7 @@ function getProjectSessionFile(workspaceDir: string): string {
 }
 
 function ensurePreinstalledSkills() {
-  const userHome = process.env.USERPROFILE || process.env.HOME || 'C:\\Users\\DELLPC';
+  const userHome = process.env.USERPROFILE || process.env.HOME || process.cwd();
   const skillsDir = path.join(userHome, 'AppData', 'Local', 'hermes', 'skills');
   try {
     if (!fs.existsSync(skillsDir)) {
@@ -54,7 +58,7 @@ ensurePreinstalledSkills();
 // Helper to load Hermes config if available
 function loadHermesConfig() {
   try {
-    const userHome = process.env.USERPROFILE || process.env.HOME || 'C:\\Users\\DELLPC';
+    const userHome = process.env.USERPROFILE || process.env.HOME || process.cwd();
     const hermesCfgPath = path.join(userHome, 'AppData', 'Local', 'hermes', 'config.yaml');
     if (fs.existsSync(hermesCfgPath)) {
       const content = fs.readFileSync(hermesCfgPath, 'utf-8');
@@ -87,6 +91,11 @@ if (fs.existsSync(CONFIG_FILE)) {
   try {
     const saved = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
     currentConfig = { ...currentConfig, ...saved };
+    if (!fs.existsSync(currentConfig.workspaceDir) || !fs.statSync(currentConfig.workspaceDir).isDirectory()) {
+      currentConfig.workspaceDir = process.cwd();
+    } else {
+      currentConfig.workspaceDir = path.resolve(currentConfig.workspaceDir);
+    }
   } catch {}
 }
 
@@ -129,23 +138,42 @@ const server = http.createServer(async (req, res) => {
       req.on('end', () => {
         try {
           const data = JSON.parse(body);
-          if (data.apiKey !== undefined) currentConfig.apiKey = data.apiKey;
-          if (data.baseURL !== undefined) currentConfig.baseURL = data.baseURL;
-          if (data.model !== undefined) currentConfig.model = data.model;
-          if (data.workspaceDir !== undefined && fs.existsSync(data.workspaceDir)) {
-            currentConfig.workspaceDir = data.workspaceDir;
+          const nextConfig = { ...currentConfig };
+          if (data.apiKey !== undefined) {
+            if (typeof data.apiKey !== 'string') throw new Error('API key must be text');
+            nextConfig.apiKey = data.apiKey.trim();
+          }
+          if (data.baseURL !== undefined) {
+            if (typeof data.baseURL !== 'string' || !data.baseURL.trim()) {
+              throw new Error('Base URL must be a non-empty URL');
+            }
+            nextConfig.baseURL = data.baseURL.trim().replace(/\/+$/, '');
+          }
+          if (data.model !== undefined) {
+            if (typeof data.model !== 'string' || !data.model.trim()) {
+              throw new Error('Model must be a non-empty identifier');
+            }
+            nextConfig.model = data.model.trim();
+          }
+          if (data.workspaceDir !== undefined) {
+            if (typeof data.workspaceDir !== 'string' || !data.workspaceDir.trim()) {
+              throw new Error('Workspace directory must be a non-empty path');
+            }
+            const requestedWorkspace = path.resolve(data.workspaceDir);
+            if (!fs.existsSync(requestedWorkspace) || !fs.statSync(requestedWorkspace).isDirectory()) {
+              throw new Error(`Workspace directory does not exist: ${data.workspaceDir}`);
+            }
+            nextConfig.workspaceDir = requestedWorkspace;
           }
 
-          fs.writeFileSync(CONFIG_FILE, JSON.stringify(currentConfig, null, 2), 'utf-8');
+          fs.writeFileSync(CONFIG_FILE, JSON.stringify(nextConfig, null, 2), 'utf-8');
+          currentConfig = nextConfig;
           llmClient.updateConfig({
             apiKey: currentConfig.apiKey,
             baseURL: currentConfig.baseURL,
             model: currentConfig.model,
           });
-          currentAgent = new Agent({
-            cwd: currentConfig.workspaceDir,
-            llm: llmClient,
-          });
+          currentAgent.setWorkspace(currentConfig.workspaceDir);
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ success: true, config: currentConfig }));
@@ -167,7 +195,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/api/skills' && req.method === 'GET') {
-    const hermesSkillsDir = path.join(process.env.LOCALAPPDATA || 'C:\\Users\\DELLPC\\AppData\\Local', 'hermes', 'skills');
+    const hermesSkillsDir = path.join(process.env.LOCALAPPDATA || process.cwd(), 'hermes', 'skills');
     const localSkillsDir = path.join(currentConfig.workspaceDir, '.hermes', 'skills');
     
     let skillsList: Array<{ name: string; category: string; description: string; source: string; path: string }> = [
@@ -236,8 +264,12 @@ const server = http.createServer(async (req, res) => {
     scanSkillDir(hermesSkillsDir, 'hermes-system');
     scanSkillDir(localSkillsDir, 'workspace-local');
 
+    const uniqueSkills = Array.from(
+      new Map(skillsList.map((skill) => [skill.name, skill])).values(),
+    );
+
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ skills: skillsList }));
+    res.end(JSON.stringify({ skills: uniqueSkills }));
     return;
   }
 
@@ -248,7 +280,12 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ error: 'Missing path' }));
       return;
     }
-    const full = path.isAbsolute(filePath) ? filePath : path.join(currentConfig.workspaceDir, filePath);
+    const full = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(currentConfig.workspaceDir, filePath);
+    if (!isPathInsideWorkspace(full, currentConfig.workspaceDir)) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'File is outside the active workspace' }));
+      return;
+    }
     if (!fs.existsSync(full) || fs.statSync(full).isDirectory()) {
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'File not found' }));
@@ -362,7 +399,22 @@ const server = http.createServer(async (req, res) => {
 
 function getFileTree(dir: string, base: string, depth = 0): any[] {
   if (depth > 4) return [];
-  const IGNORED = new Set(['node_modules', '.git', 'dist', 'build', '.next', '.cache', '.ichigo-sessions', '.alisa-sessions']);
+  const IGNORED = new Set([
+    'node_modules',
+    '.git',
+    'dist',
+    'dist-electron',
+    'release',
+    'build',
+    '.next',
+    '.cache',
+    '.ichigo-sessions',
+    '.alisa-sessions',
+    '.ichigo-snapshots',
+    'config.json',
+    '.ichigo-config.json',
+    'work.md',
+  ]);
   try {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     return entries
@@ -390,11 +442,18 @@ function getFileTree(dir: string, base: string, depth = 0): any[] {
   }
 }
 
+function isPathInsideWorkspace(filePath: string, workspaceDir: string): boolean {
+  const workspace = path.resolve(workspaceDir);
+  const target = path.resolve(filePath);
+  return target === workspace || target.startsWith(`${workspace}${path.sep}`);
+}
+
 // WebSocket Server
 const wss = new WebSocketServer({ server });
 
 wss.on('connection', (ws: WebSocket) => {
-  let sessionFile = getProjectSessionFile(currentConfig.workspaceDir);
+  let sessionWorkspace = currentConfig.workspaceDir;
+  let sessionFile = getProjectSessionFile(sessionWorkspace);
   let sessionHistory: Message[] = [];
   if (fs.existsSync(sessionFile)) {
     try {
@@ -416,6 +475,17 @@ wss.on('connection', (ws: WebSocket) => {
 
   ws.on('message', async (data: string) => {
     try {
+      if (sessionWorkspace !== currentConfig.workspaceDir) {
+        sessionWorkspace = currentConfig.workspaceDir;
+        sessionFile = getProjectSessionFile(sessionWorkspace);
+        sessionHistory = [];
+        if (fs.existsSync(sessionFile)) {
+          try {
+            sessionHistory = JSON.parse(fs.readFileSync(sessionFile, 'utf-8'));
+          } catch {}
+        }
+      }
+
       const msg = JSON.parse(data.toString());
       if (msg.type === 'start_task') {
         const prompt = msg.prompt;
@@ -444,11 +514,11 @@ wss.on('connection', (ws: WebSocket) => {
   broadcast({
     type: 'status_change',
     status: 'idle',
-    detail: `Ready. Workspace: ${currentConfig.workspaceDir}`,
+    detail: 'Backend connected',
   });
 });
 
 server.listen(PORT, () => {
-  console.log(`🍓 Ichigo Agent Server running on http://localhost:${PORT}`);
+  console.log(`🍓 Project Alisa Studio backend running on http://localhost:${PORT}`);
   console.log(`📂 Active Workspace: ${currentConfig.workspaceDir}`);
 });

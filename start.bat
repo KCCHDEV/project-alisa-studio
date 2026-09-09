@@ -1,9 +1,14 @@
 @echo off
-title Ichigo Agent App
+setlocal
+title Project Alisa Studio
 echo ===================================================
-echo     🍓 Starting Ichigo Agent Studio...
+echo     🍓 Starting Project Alisa Studio...
 echo ===================================================
 cd /d "%~dp0"
-start "" http://localhost:3000
-bun run src/server/index.ts & vite
+start "Project Alisa Backend" /min cmd /c "bun run src/server/index.ts"
+start "Project Alisa UI" /min cmd /c "bun run dev -- --host 127.0.0.1"
+
+echo Waiting for the UI to become ready...
+call bunx --bun wait-on http://127.0.0.1:3000
+start "" http://127.0.0.1:3000
 pause
