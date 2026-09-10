@@ -17,7 +17,24 @@ import { terminalTool } from '../tools/terminal.ts';
 
 const PORT = Number(process.env.PORT || 3001);
 const RUNTIME_DIR = process.env.ALISA_CONFIG_DIR || process.cwd();
-const CONFIG_FILE = path.join(RUNTIME_DIR, '.ichigo-config.json');
+export interface ProviderProfile {
+  id: string;
+  name: string;
+  baseURL: string;
+  apiKey: string;
+  model: string;
+  isPreset?: boolean;
+}
+
+interface AppConfig extends LLMConfig {
+  workspaceDir: string;
+  recentWorkspaces: string[];
+  activeProviderId: string;
+  providers: ProviderProfile[];
+}
+
+const CONFIG_FILE = path.join(RUNTIME_DIR, '.alisa-config.json');
+const LEGACY_CONFIG_FILE = path.join(RUNTIME_DIR, '.ichigo-config.json');
 const ALISA_SESSIONS_DIR = path.join(RUNTIME_DIR, '.alisa-sessions');
 
 if (!fs.existsSync(RUNTIME_DIR)) {
@@ -27,7 +44,7 @@ if (!fs.existsSync(ALISA_SESSIONS_DIR)) {
   fs.mkdirSync(ALISA_SESSIONS_DIR, { recursive: true });
 }
 
-// Helper to load Hermes config if available
+// Helper to load Hermes OmniRoute config if available
 function loadHermesConfig() {
   try {
     const userHome = process.env.USERPROFILE || process.env.HOME || process.cwd();
@@ -38,8 +55,8 @@ function loadHermesConfig() {
       const apiKeyMatch = content.match(/api_key:\s*([^\s\r\n]+)/);
       const defaultModelMatch = content.match(/default:\s*([^\s\r\n]+)/);
       return {
-        baseURL: baseUrlMatch ? baseUrlMatch[1] : 'http://localhost:8000/v1',
-        apiKey: apiKeyMatch ? apiKeyMatch[1] : '',
+        baseURL: baseUrlMatch ? baseUrlMatch[1] : 'http://100.84.157.69:10009/v1',
+        apiKey: apiKeyMatch ? apiKeyMatch[1] : 'sk-b6e85876e760a13f-cbda91-e61a2aa3',
         model: defaultModelMatch ? defaultModelMatch[1] : 'auto/best-coding'
       };
     }
@@ -51,19 +68,107 @@ function loadHermesConfig() {
 
 const hermesFallback = loadHermesConfig();
 
-// Load or default config
-let currentConfig: LLMConfig & { workspaceDir: string; recentWorkspaces: string[] } = {
-  apiKey: hermesFallback?.apiKey || process.env.OPENAI_API_KEY || process.env.OPENROUTER_API_KEY || '',
-  baseURL: hermesFallback?.baseURL || process.env.OPENAI_BASE_URL || 'https://openrouter.ai/api/v1',
-  model: hermesFallback?.model || 'deepseek/deepseek-chat',
+const DEFAULT_PROVIDERS: ProviderProfile[] = [
+  {
+    id: 'omniroute',
+    name: 'OmniRoute',
+    baseURL: hermesFallback?.baseURL || 'http://100.84.157.69:10009/v1',
+    apiKey: hermesFallback?.apiKey || 'sk-b6e85876e760a13f-cbda91-e61a2aa3',
+    model: hermesFallback?.model || 'auto/best-coding',
+    isPreset: true,
+  },
+  {
+    id: 'openrouter',
+    name: 'OpenRouter',
+    baseURL: 'https://openrouter.ai/api/v1',
+    apiKey: process.env.OPENROUTER_API_KEY || '',
+    model: 'deepseek/deepseek-chat',
+    isPreset: true,
+  },
+  {
+    id: 'deepseek',
+    name: 'DeepSeek',
+    baseURL: 'https://api.deepseek.com/v1',
+    apiKey: '',
+    model: 'deepseek-chat',
+    isPreset: true,
+  },
+  {
+    id: 'openai',
+    name: 'OpenAI',
+    baseURL: 'https://api.openai.com/v1',
+    apiKey: process.env.OPENAI_API_KEY || '',
+    model: 'gpt-4o-mini',
+    isPreset: true,
+  },
+  {
+    id: 'ollama',
+    name: 'Ollama (Local)',
+    baseURL: 'http://127.0.0.1:11434/v1',
+    apiKey: 'ollama',
+    model: 'qwen2.5-coder:latest',
+    isPreset: true,
+  },
+];
+
+let currentConfig: AppConfig = {
+  apiKey: DEFAULT_PROVIDERS[0].apiKey,
+  baseURL: DEFAULT_PROVIDERS[0].baseURL,
+  model: DEFAULT_PROVIDERS[0].model,
   workspaceDir: process.cwd(),
   recentWorkspaces: [process.cwd()],
+  activeProviderId: DEFAULT_PROVIDERS[0].id,
+  providers: DEFAULT_PROVIDERS,
 };
 
-if (fs.existsSync(CONFIG_FILE)) {
+const configFileToRead = fs.existsSync(CONFIG_FILE) ? CONFIG_FILE : (fs.existsSync(LEGACY_CONFIG_FILE) ? LEGACY_CONFIG_FILE : null);
+if (configFileToRead) {
   try {
-    const saved = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
+    const saved = JSON.parse(fs.readFileSync(configFileToRead, 'utf-8'));
     currentConfig = { ...currentConfig, ...saved };
+    if (!Array.isArray(currentConfig.providers) || currentConfig.providers.length === 0) {
+      currentConfig.providers = DEFAULT_PROVIDERS;
+    } else {
+      for (const def of DEFAULT_PROVIDERS) {
+        const found = currentConfig.providers.find(p => p.id === def.id);
+        if (!found) {
+          currentConfig.providers.push(def);
+        } else if (!found.apiKey && def.apiKey) {
+          found.apiKey = def.apiKey;
+        }
+      }
+    }
+    if (saved.baseURL && !saved.activeProviderId) {
+      // Legacy config or test provided explicit baseURL/apiKey
+      currentConfig.baseURL = saved.baseURL;
+      currentConfig.apiKey = saved.apiKey || '';
+      currentConfig.model = saved.model || 'auto/best-coding';
+      const existing = currentConfig.providers.find(p => p.baseURL === saved.baseURL);
+      if (existing) {
+        currentConfig.activeProviderId = existing.id;
+        existing.apiKey = currentConfig.apiKey;
+        existing.model = currentConfig.model;
+      } else {
+        const custom: ProviderProfile = {
+          id: 'custom_default',
+          name: 'Custom Endpoint',
+          baseURL: saved.baseURL,
+          apiKey: currentConfig.apiKey,
+          model: currentConfig.model,
+          isPreset: false,
+        };
+        currentConfig.providers.unshift(custom);
+        currentConfig.activeProviderId = custom.id;
+      }
+    } else {
+      if (!currentConfig.activeProviderId) {
+        currentConfig.activeProviderId = 'omniroute';
+      }
+      const active = currentConfig.providers.find(p => p.id === currentConfig.activeProviderId) || currentConfig.providers[0];
+      currentConfig.baseURL = active.baseURL;
+      currentConfig.apiKey = active.apiKey;
+      currentConfig.model = active.model;
+    }
     if (!fs.existsSync(currentConfig.workspaceDir) || !fs.statSync(currentConfig.workspaceDir).isDirectory()) {
       currentConfig.workspaceDir = process.cwd();
     } else {
@@ -78,14 +183,30 @@ if (fs.existsSync(CONFIG_FILE)) {
   } catch {}
 }
 
-function getPublicConfig(config: LLMConfig & { workspaceDir: string; recentWorkspaces: string[] }) {
+function getPublicConfig(config: AppConfig) {
+  const maskKey = (key?: string) => {
+    if (!key) return '';
+    if (key.length <= 8) return '••••••••';
+    return `${key.slice(0, 4)}••••${key.slice(-4)}`;
+  };
+
   return {
     baseURL: config.baseURL,
     model: config.model,
     workspaceDir: config.workspaceDir,
     recentWorkspaces: config.recentWorkspaces || [config.workspaceDir],
     hasKey: Boolean(config.apiKey),
-    apiKeyMasked: config.apiKey ? '••••••••' : '',
+    apiKeyMasked: maskKey(config.apiKey),
+    activeProviderId: config.activeProviderId || 'omniroute',
+    providers: (config.providers || DEFAULT_PROVIDERS).map(p => ({
+      id: p.id,
+      name: p.name,
+      baseURL: p.baseURL,
+      model: p.model,
+      isPreset: Boolean(p.isPreset),
+      hasKey: Boolean(p.apiKey),
+      apiKeyMasked: maskKey(p.apiKey),
+    })),
   };
 }
 
@@ -211,14 +332,139 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (url.pathname === '/api/provider/test' && req.method === 'POST') {
-    try {
-      const config = { ...currentConfig };
-      const response = await fetch(`${config.baseURL.replace(/\/+$/, '')}/models`, { headers: { Authorization: `Bearer ${config.apiKey}` }, signal: AbortSignal.timeout(15000), redirect: 'error' });
-      if (!response.ok) throw new Error(`Provider returned HTTP ${response.status}. Check the saved URL and API key.`);
-      const data = await response.json() as { data?: Array<{ id: string }> };
-      res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ models: (data.data || []).filter(m => typeof m.id === 'string').map(m => m.id), message: 'Connected. Model discovery succeeded; tool calling depends on the selected model.' }));
-    } catch (err: any) { res.writeHead(400); res.end(JSON.stringify({ error: err.message })); }
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', async () => {
+      try {
+        let testBaseURL = currentConfig.baseURL;
+        let testApiKey = currentConfig.apiKey;
+        if (body) {
+          try {
+            const parsed = JSON.parse(body);
+            if (parsed.baseURL) testBaseURL = parsed.baseURL.trim();
+            if (parsed.apiKey !== undefined && parsed.apiKey !== '') testApiKey = parsed.apiKey.trim();
+          } catch {}
+        }
+        const response = await fetch(`${testBaseURL.replace(/\/+$/, '')}/models`, {
+          headers: testApiKey ? { Authorization: `Bearer ${testApiKey}` } : undefined,
+          signal: AbortSignal.timeout(15000),
+          redirect: 'error'
+        });
+        if (!response.ok) throw new Error(`Provider returned HTTP ${response.status}. Check the URL and API key.`);
+        const data = await response.json() as { data?: Array<{ id: string }> };
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          models: (data.data || []).filter(m => typeof m.id === 'string').map(m => m.id),
+          message: `Connected successfully (${data.data?.length || 0} models found). Model discovery succeeded.`
+        }));
+      } catch (err: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  if (url.pathname === '/api/providers/switch' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const { providerId } = JSON.parse(body);
+        const target = currentConfig.providers.find(p => p.id === providerId);
+        if (!target) throw new Error(`Provider "${providerId}" not found`);
+        currentConfig.activeProviderId = target.id;
+        currentConfig.baseURL = target.baseURL;
+        currentConfig.apiKey = target.apiKey;
+        currentConfig.model = target.model;
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(currentConfig, null, 2), 'utf-8');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, config: getPublicConfig(currentConfig) }));
+      } catch (err: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  if (url.pathname === '/api/providers/save' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const { id, name, baseURL, apiKey, model, setActive } = data;
+        if (!name || !baseURL) throw new Error('Name and Base URL are required');
+        const trimmedUrl = baseURL.trim().replace(/\/+$/, '');
+        const parsedURL = new URL(trimmedUrl);
+        if (!['http:', 'https:'].includes(parsedURL.protocol)) throw new Error('Use an HTTP or HTTPS API URL');
+
+        const existingIdx = currentConfig.providers.findIndex(p => p.id === id);
+        const providerId = id || `custom_${Date.now()}`;
+        const existing = existingIdx >= 0 ? currentConfig.providers[existingIdx] : null;
+
+        const nextApiKey = apiKey !== undefined && apiKey !== '' ? apiKey.trim() : (existing?.apiKey || '');
+        const nextModel = (model || existing?.model || 'auto/best-coding').trim();
+
+        const updatedProfile: ProviderProfile = {
+          id: providerId,
+          name: name.trim(),
+          baseURL: trimmedUrl,
+          apiKey: nextApiKey,
+          model: nextModel,
+          isPreset: existing?.isPreset || false,
+        };
+
+        if (existingIdx >= 0) {
+          currentConfig.providers[existingIdx] = updatedProfile;
+        } else {
+          currentConfig.providers.push(updatedProfile);
+        }
+
+        if (setActive || currentConfig.activeProviderId === providerId) {
+          currentConfig.activeProviderId = providerId;
+          currentConfig.baseURL = updatedProfile.baseURL;
+          currentConfig.apiKey = updatedProfile.apiKey;
+          currentConfig.model = updatedProfile.model;
+        }
+
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(currentConfig, null, 2), 'utf-8');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, config: getPublicConfig(currentConfig) }));
+      } catch (err: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  if (url.pathname === '/api/providers/delete' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const { providerId } = data;
+        const target = currentConfig.providers.find(p => p.id === providerId);
+        if (target?.isPreset) throw new Error('Cannot delete built-in provider presets');
+        currentConfig.providers = currentConfig.providers.filter(p => p.id !== providerId);
+        if (currentConfig.activeProviderId === providerId) {
+          const fallback = currentConfig.providers[0];
+          currentConfig.activeProviderId = fallback.id;
+          currentConfig.baseURL = fallback.baseURL;
+          currentConfig.apiKey = fallback.apiKey;
+          currentConfig.model = fallback.model;
+        }
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(currentConfig, null, 2), 'utf-8');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, config: getPublicConfig(currentConfig) }));
+      } catch (err: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
     return;
   }
 
@@ -237,8 +483,6 @@ const server = http.createServer(async (req, res) => {
           if (data.apiKey !== undefined) {
             if (typeof data.apiKey !== 'string') throw new Error('API key must be text');
             const nextApiKey = data.apiKey.trim();
-            // An empty field keeps the stored key unless the client explicitly
-            // requests clearing it.
             if (nextApiKey || data.clearApiKey === true) {
               nextConfig.apiKey = nextApiKey;
             }
@@ -268,6 +512,17 @@ const server = http.createServer(async (req, res) => {
             nextConfig.workspaceDir = requestedWorkspace;
             const existingRecent = (nextConfig.recentWorkspaces || []).filter(w => w !== requestedWorkspace);
             nextConfig.recentWorkspaces = [requestedWorkspace, ...existingRecent].slice(0, 20);
+          }
+
+          // Keep active provider in sync with direct config changes
+          const activeIdx = nextConfig.providers.findIndex(p => p.id === nextConfig.activeProviderId);
+          if (activeIdx >= 0) {
+            nextConfig.providers[activeIdx] = {
+              ...nextConfig.providers[activeIdx],
+              baseURL: nextConfig.baseURL,
+              apiKey: nextConfig.apiKey,
+              model: nextConfig.model,
+            };
           }
 
           fs.writeFileSync(CONFIG_FILE, JSON.stringify(nextConfig, null, 2), 'utf-8');
@@ -710,15 +965,15 @@ wss.on('connection', (ws: WebSocket) => {
 
 server.on('error', (err: any) => {
   if (err?.code === 'EADDRINUSE' || err?.message?.includes('in use') || err?.message?.includes('EADDRINUSE')) {
-    console.warn(`⚠️ Port ${PORT} is already in use. Project Alisa Studio backend may already be running.`);
+    console.warn(`[WARN] Port ${PORT} is already in use. Project Alisa Studio backend may already be running.`);
     process.exit(1);
   } else {
-    console.error('Server error:', err);
+    console.error('[ERROR] Server error:', err);
     process.exit(1);
   }
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  console.log(`🍓 Project Alisa Studio backend running on http://localhost:${PORT}`);
-  console.log(`📂 Active Workspace: ${currentConfig.workspaceDir}`);
+  console.log(`[Alisa Studio] Backend running on http://127.0.0.1:${PORT}`);
+  console.log(`[Workspace] Active: ${currentConfig.workspaceDir}`);
 });

@@ -149,7 +149,7 @@ export class Agent {
         const errorAssistantMsg: Message = {
           id: `msg_err_${Date.now()}`,
           role: 'assistant',
-          content: `❌ เกิดข้อผิดพลาดในการเรียกโมเดล: ${errMsg}`,
+          content: `[Error] เกิดข้อผิดพลาดในการเรียกโมเดล: ${errMsg}`,
           timestamp: Date.now(),
           metadata: { error: true },
         };

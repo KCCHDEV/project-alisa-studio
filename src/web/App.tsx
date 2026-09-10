@@ -1,5 +1,8 @@
 import { ProjectPanel } from './ProjectPanel';
 import React, { useState, useEffect, useRef } from 'react';
+import { AlisaLogo } from './components/AlisaLogo';
+import { AlisaAvatar } from './components/AlisaAvatar';
+import { MarkdownRenderer } from './components/MarkdownRenderer';
 import {
   Bug,
   FolderTree,
@@ -16,6 +19,7 @@ import {
   CheckCircle2,
   XCircle,
   AlertCircle,
+  AlertTriangle,
   Cpu,
   Play,
   Square,
@@ -64,8 +68,26 @@ import {
   Braces,
   Palette,
   Clock,
-  History
+  History,
+  Brain,
+  Loader2,
+  Wifi,
+  WifiOff,
+  KeyRound,
+  Server,
+  ArrowUp,
+  Gem
 } from 'lucide-react';
+
+export interface ProviderProfile {
+  id: string;
+  name: string;
+  baseURL: string;
+  model: string;
+  isPreset?: boolean;
+  hasKey?: boolean;
+  apiKeyMasked?: string;
+}
 
 interface FileNode {
   name: string;
@@ -127,57 +149,7 @@ function toChatMessages(history: any[]): ChatMessage[] {
 }
 
 function renderAssistantContent(content: string) {
-  const parts = content.split(/(```[\s\S]*?```)/g);
-  return parts.map((part, index) => {
-    if (!part.startsWith('```')) {
-      return (
-        <span key={`text-${index}`} className="whitespace-pre-wrap leading-6">
-          {part}
-        </span>
-      );
-    }
-
-    const firstLineEnd = part.indexOf('\n');
-    const header = firstLineEnd !== -1 ? part.slice(3, firstLineEnd).trim() : '';
-    const body = firstLineEnd !== -1 ? part.slice(firstLineEnd + 1, -3) : part.slice(3, -3);
-
-    if (header.toLowerCase() === 'diff') {
-      const diffLines = body.split('\n');
-      return (
-        <pre
-          key={`diff-${index}`}
-          className="my-3 overflow-x-auto rounded-xl border border-[#2b333f] bg-[#0d1015] p-3 font-mono text-xs leading-5 text-[#d4d8e0]"
-        >
-          {diffLines.map((line, lineIndex) => {
-            const isAdd = line.startsWith('+');
-            const isDel = line.startsWith('-');
-            const isHunk = line.startsWith('@@');
-            const className = isAdd
-              ? 'diff-add block rounded px-1'
-              : isDel
-              ? 'diff-remove block rounded px-1'
-              : isHunk
-              ? 'text-[#8da4c6] block'
-              : 'block';
-            return (
-              <code key={`diff-line-${lineIndex}`} className={className}>
-                {line || ' '}
-              </code>
-            );
-          })}
-        </pre>
-      );
-    }
-
-    return (
-      <pre
-        key={`code-${index}`}
-        className="my-3 overflow-x-auto rounded-xl border border-[#2b333f] bg-[#0d1015] p-3 font-mono text-xs leading-5 text-[#d4d8e0]"
-      >
-        <code>{body}</code>
-      </pre>
-    );
-  });
+  return <MarkdownRenderer content={content} />;
 }
 
 function getFileIcon(fileName: string) {
@@ -338,19 +310,39 @@ export default function App() {
     },
   ];
 
-  // Settings Modal
+  // Settings Modal & Providers State
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<'providers' | 'workspace'>('providers');
   const [apiKey, setApiKey] = useState('');
   const [apiKeyMasked, setApiKeyMasked] = useState('');
-  const [baseURL, setBaseURL] = useState('https://openrouter.ai/api/v1');
-  const [model, setModel] = useState('deepseek/deepseek-chat');
+  const [baseURL, setBaseURL] = useState('http://100.84.157.69:10009/v1');
+  const [model, setModel] = useState('auto/best-coding');
+  const [providers, setProviders] = useState<ProviderProfile[]>([]);
+  const [activeProviderId, setActiveProviderId] = useState<string>('omniroute');
+  const [showProviderMenu, setShowProviderMenu] = useState(false);
+
+  // Selected provider in settings editor
+  const [selectedProviderId, setSelectedProviderId] = useState<string>('omniroute');
+  const [editProviderName, setEditProviderName] = useState('');
+  const [editProviderBaseURL, setEditProviderBaseURL] = useState('');
+  const [editProviderApiKey, setEditProviderApiKey] = useState('');
+  const [editProviderModel, setEditProviderModel] = useState('');
+  const [isAddingNewProvider, setIsAddingNewProvider] = useState(false);
   const [providerTest, setProviderTest] = useState('');
   const [providerModels, setProviderModels] = useState<string[]>([]);
   const [isTestingProvider, setIsTestingProvider] = useState(false);
+  const [providerActionNotice, setProviderActionNotice] = useState<string | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
 
   // Model Picker Dropdown
   const [showModelPicker, setShowModelPicker] = useState(false);
+
+  // Modern Minimalist Composer State (+ Menu & Slash Commands)
+  const [showPlusMenu, setShowPlusMenu] = useState(false);
+  const [slashMenuOpen, setSlashMenuOpen] = useState(false);
+  const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Workspace Switch Modal
   const [showWorkspacePicker, setShowWorkspacePicker] = useState(false);
@@ -416,6 +408,9 @@ export default function App() {
         setShowSettings(false);
         setShowModelPicker(false);
         setShowProjectMenu(false);
+        setShowProviderMenu(false);
+        setShowPlusMenu(false);
+        setSlashMenuOpen(false);
         setShowCreateModal(false);
       }
     };
@@ -469,7 +464,7 @@ export default function App() {
         setIsBackendConnected(true);
         setStatusDetail('Ready');
         fetchConfig(); fetchWorkspaceFiles(); fetchSkills(); fetchProjectSessions();
-        addTerminalLog('🍓 Connected to Alisa Studio agent.');
+        addTerminalLog('[SYSTEM] Connected to Alisa Studio agent.');
       };
 
       ws.onmessage = (event) => {
@@ -514,11 +509,17 @@ export default function App() {
       const data = await res.json();
       setApiKey('');
       setApiKeyMasked(data.apiKeyMasked || '');
-      setBaseURL(data.baseURL || 'https://openrouter.ai/api/v1');
-      setModel(data.model || 'deepseek/deepseek-chat');
+      setBaseURL(data.baseURL || 'http://100.84.157.69:10009/v1');
+      setModel(data.model || 'auto/best-coding');
       setWorkspaceDir(data.workspaceDir || '');
       if (Array.isArray(data.recentWorkspaces)) {
         setRecentWorkspaces(data.recentWorkspaces);
+      }
+      if (Array.isArray(data.providers)) {
+        setProviders(data.providers);
+      }
+      if (data.activeProviderId) {
+        setActiveProviderId(data.activeProviderId);
       }
     } catch (err) {
       console.error('Failed to fetch config:', err);
@@ -553,7 +554,7 @@ export default function App() {
       const data = await res.json();
       if (data.skills) {
         setSkills(data.skills);
-        addTerminalLog(`🧩 Loaded ${data.skills.length} OpenClaude Skills`);
+        addTerminalLog(`[SKILL] Loaded ${data.skills.length} Skills`);
       }
     } catch (err) {
       console.error('Failed to fetch skills:', err);
@@ -565,7 +566,7 @@ export default function App() {
       const exists = prev.includes(skillName);
       const next = exists ? prev.filter((s) => s !== skillName) : [...prev, skillName];
       localStorage.setItem(`alisa-skills:${workspaceDir}`, JSON.stringify(next));
-      addTerminalLog(exists ? `🔴 Disabled Skill: ${skillName}` : `🟢 Activated Skill: ${skillName}`);
+      addTerminalLog(exists ? `[SKILL] Disabled: ${skillName}` : `[SKILL] Activated: ${skillName}`);
       return next;
     });
   };
@@ -591,10 +592,209 @@ export default function App() {
       setApiKeyMasked(data.config?.apiKeyMasked || apiKeyMasked);
       setShowSettings(false);
       fetchWorkspaceFiles();
-      addTerminalLog(`⚙️ Config Saved: ${model}`);
+      addTerminalLog(`[CONFIG] Saved model: ${model}`);
     } catch (err) {
       console.error('Failed to save config:', err);
       setSettingsError(err instanceof Error ? err.message : 'Unable to save settings');
+    }
+  };
+
+  const openSettingsModal = (tab: 'providers' | 'workspace' = 'providers', providerIdToSelect?: string) => {
+    setSettingsTab(tab);
+    setSettingsError(null);
+    setProviderActionNotice(null);
+    setProviderTest('');
+    setProviderModels([]);
+    setIsAddingNewProvider(false);
+
+    const targetId = providerIdToSelect || activeProviderId;
+    setSelectedProviderId(targetId);
+    const target = providers.find((p) => p.id === targetId);
+    if (target) {
+      setEditProviderName(target.name);
+      setEditProviderBaseURL(target.baseURL);
+      setEditProviderApiKey('');
+      setEditProviderModel(target.model);
+    }
+    setShowSettings(true);
+  };
+
+  const handleSelectProviderInSettings = (providerId: string) => {
+    setSelectedProviderId(providerId);
+    setIsAddingNewProvider(false);
+    setSettingsError(null);
+    setProviderActionNotice(null);
+    setProviderTest('');
+    setProviderModels([]);
+    const target = providers.find((p) => p.id === providerId);
+    if (target) {
+      setEditProviderName(target.name);
+      setEditProviderBaseURL(target.baseURL);
+      setEditProviderApiKey('');
+      setEditProviderModel(target.model);
+    }
+  };
+
+  const handleStartAddProvider = () => {
+    setIsAddingNewProvider(true);
+    setSelectedProviderId('');
+    setSettingsError(null);
+    setProviderActionNotice(null);
+    setProviderTest('');
+    setProviderModels([]);
+    setEditProviderName('');
+    setEditProviderBaseURL('');
+    setEditProviderApiKey('');
+    setEditProviderModel('auto/best-coding');
+  };
+
+  const handleSwitchProvider = async (providerId: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/providers/switch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ providerId }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to switch provider');
+      }
+      setActiveProviderId(providerId);
+      setShowProviderMenu(false);
+      if (data.config) {
+        setBaseURL(data.config.baseURL);
+        setModel(data.config.model);
+        setApiKeyMasked(data.config.apiKeyMasked || '');
+        if (Array.isArray(data.config.providers)) {
+          setProviders(data.config.providers);
+        }
+      }
+      const switched = data.config?.providers?.find((p: any) => p.id === providerId);
+      addTerminalLog(`[PROVIDER] Switched active provider to: ${switched?.name || providerId}`);
+    } catch (err: any) {
+      console.error('Provider switch error:', err);
+      addTerminalLog(`[ERROR] Failed to switch provider: ${err.message}`);
+    }
+  };
+
+  const handleSaveCurrentProvider = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    setSettingsError(null);
+    setProviderActionNotice(null);
+
+    const name = editProviderName.trim();
+    const targetBaseURL = editProviderBaseURL.trim();
+    const targetModel = editProviderModel.trim() || 'auto/best-coding';
+
+    if (!name) {
+      setSettingsError('Please provide a provider name');
+      return;
+    }
+    if (!targetBaseURL) {
+      setSettingsError('Please provide a base URL');
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/api/providers/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: isAddingNewProvider ? undefined : selectedProviderId,
+          name,
+          baseURL: targetBaseURL,
+          apiKey: editProviderApiKey || undefined,
+          model: targetModel,
+          setActive: isAddingNewProvider ? true : undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to save provider profile');
+      }
+      if (data.config) {
+        setBaseURL(data.config.baseURL);
+        setModel(data.config.model);
+        setApiKeyMasked(data.config.apiKeyMasked || '');
+        if (Array.isArray(data.config.providers)) {
+          setProviders(data.config.providers);
+        }
+        if (data.config.activeProviderId) {
+          setActiveProviderId(data.config.activeProviderId);
+          setSelectedProviderId(data.config.activeProviderId);
+        }
+      }
+      setIsAddingNewProvider(false);
+      setEditProviderApiKey('');
+      setProviderActionNotice(`Saved provider: ${name}`);
+      addTerminalLog(`[PROVIDER] Saved provider: ${name}`);
+    } catch (err: any) {
+      setSettingsError(err.message || 'Failed to save provider');
+    }
+  };
+
+  const handleDeleteCurrentProvider = async (providerId: string) => {
+    if (!window.confirm('Delete this custom provider?')) return;
+    setSettingsError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/providers/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ providerId }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to delete provider');
+      }
+      if (data.config) {
+        setBaseURL(data.config.baseURL);
+        setModel(data.config.model);
+        setApiKeyMasked(data.config.apiKeyMasked || '');
+        if (Array.isArray(data.config.providers)) {
+          setProviders(data.config.providers);
+        }
+        if (data.config.activeProviderId) {
+          setActiveProviderId(data.config.activeProviderId);
+          handleSelectProviderInSettings(data.config.activeProviderId);
+        }
+      }
+      addTerminalLog(`[PROVIDER] Removed custom provider: ${providerId}`);
+    } catch (err: any) {
+      setSettingsError(err.message || 'Failed to delete provider');
+    }
+  };
+
+  const handleTestConnection = async () => {
+    const targetBaseURL = editProviderBaseURL.trim();
+    if (!targetBaseURL) {
+      setSettingsError('Please enter a Base URL to test');
+      return;
+    }
+    setIsTestingProvider(true);
+    setProviderTest('Testing connection…');
+    setProviderModels([]);
+    try {
+      const res = await fetch(`${API_BASE}/api/provider/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          baseURL: targetBaseURL,
+          apiKey: editProviderApiKey.trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Connection failed');
+      setProviderModels(data.models || []);
+      setProviderTest(data.message || 'Connected successfully!');
+      if (Array.isArray(data.models) && data.models.length > 0 && !editProviderModel) {
+        setEditProviderModel(data.models[0]);
+      }
+      addTerminalLog(`[PROVIDER TEST] ${data.message || 'Connected successfully'}`);
+    } catch (err: any) {
+      setProviderTest(`Failed: ${err.message}`);
+      addTerminalLog(`[PROVIDER TEST FAILED] ${err.message}`);
+    } finally {
+      setIsTestingProvider(false);
     }
   };
 
@@ -654,7 +854,7 @@ export default function App() {
       fetchWorkspaceFiles();
       fetchProjectSessions(nextWorkspace);
       fetchSkills();
-      addTerminalLog(`📂 Switched project workspace to: ${nextWorkspace}`);
+      addTerminalLog(`[WORKSPACE] Switched project workspace to: ${nextWorkspace}`);
     } catch (err: any) {
       setWorkspaceSwitchError(err.message || 'Unable to switch workspace');
     }
@@ -687,7 +887,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: filePath || '' }),
       });
-      addTerminalLog(`📂 Opened in File Explorer: ${filePath || workspaceDir}`);
+      addTerminalLog(`[EXPLORER] Opened: ${filePath || workspaceDir}`);
     } catch (err: any) {
       console.error('Reveal error:', err);
     }
@@ -710,7 +910,7 @@ export default function App() {
       setShowCreateModal(false);
       setCreateItemName('');
       fetchWorkspaceFiles();
-      addTerminalLog(`✨ Created ${isCreatingDirectory ? 'Folder' : 'File'}: ${name}`);
+      addTerminalLog(`[FILE] Created ${isCreatingDirectory ? 'Folder' : 'File'}: ${name}`);
       if (!isCreatingDirectory) {
         handleFileClick(name);
       }
@@ -745,7 +945,7 @@ export default function App() {
       if (data.content !== undefined) {
         setFileContent(data.content);
         setEditorDraft(data.content);
-        addTerminalLog(`📄 Opened File: ${filePath}`);
+        addTerminalLog(`[FILE] Opened: ${filePath}`);
       }
     } catch (err) {
       console.error('Failed reading file:', err);
@@ -770,7 +970,7 @@ export default function App() {
         throw new Error(data.error || `File save failed (${res.status})`);
       }
       setFileContent(savedDraft);
-      addTerminalLog(`💾 Saved File: ${selectedFile}`);
+      addTerminalLog(`[FILE] Saved: ${selectedFile}`);
       fetchWorkspaceFiles();
     } catch (err) {
       console.error('Failed saving file:', err);
@@ -785,7 +985,7 @@ export default function App() {
       wsRef.current.send(JSON.stringify({ type: 'abort_task' }));
     }
     setStatusDetail('Cancelling…');
-    addTerminalLog('⏹️ Task cancelled by user.');
+    addTerminalLog('[SYSTEM] Task cancelled by user.');
   };
 
   const handleRetryMessage = (messageIndex: number) => {
@@ -819,7 +1019,7 @@ export default function App() {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unable to run command';
       setTerminalError(message);
-      addTerminalLog(`❌ ${message}`);
+      addTerminalLog(`[ERROR] ${message}`);
     } finally {
       setIsTerminalRunning(false);
     }
@@ -849,7 +1049,7 @@ export default function App() {
       });
       if (!res.ok) throw new Error('Failed to update model');
       setModel(nextModel);
-      addTerminalLog(`✨ Model changed to: ${nextModel}`);
+      addTerminalLog(`[MODEL] Changed to: ${nextModel}`);
     } catch (err) {
       setStatusDetail(err instanceof Error ? err.message : 'Unable to change model');
     }
@@ -863,16 +1063,16 @@ export default function App() {
       if (desktop?.checkForUpdates) {
         const nextState = await desktop.checkForUpdates();
         setUpdateState(nextState as UpdateState);
-        addTerminalLog(`⬆️ ${nextState.message || 'Update check finished.'}`);
+        addTerminalLog(`[UPDATE] ${nextState.message || 'Update check finished.'}`);
       } else {
         const nextState: UpdateState = { status: 'dev', message: 'Update checks are available after installing the app.' };
         setUpdateState(nextState);
-        addTerminalLog(`⬆️ ${nextState.message}`);
+        addTerminalLog(`[UPDATE] ${nextState.message}`);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unable to check for updates.';
       setUpdateState({ status: 'error', message });
-      addTerminalLog(`❌ ${message}`);
+      addTerminalLog(`[ERROR] ${message}`);
     } finally {
       setIsUpdateActionRunning(false);
     }
@@ -924,6 +1124,8 @@ export default function App() {
         streamingContentRef.current = ''; streamingThoughtRef.current = '';
         fetchProjectSessions(undefined, data.sessionId);
         setActiveToolTraces([]);
+        setStatus('idle');
+        setStatusDetail('Ready');
         break;
       case 'approval_requested':
         setApproval(data);
@@ -937,6 +1139,10 @@ export default function App() {
           setStatusDetail('Ready');
         } else if (data.status === 'done') {
           setStatusDetail('Completed');
+          setTimeout(() => {
+            setStatus((current) => current === 'done' ? 'idle' : current);
+            setStatusDetail((current) => current === 'Completed' ? 'Ready' : current);
+          }, 2500);
         }
         break;
 
@@ -967,7 +1173,7 @@ export default function App() {
             status: 'running',
           },
         ]);
-        addTerminalLog(`🛠️ Executing Tool [${data.toolName}]: ${JSON.stringify(data.args)}`);
+        addTerminalLog(`[TOOL] Executing [${data.toolName}]: ${JSON.stringify(data.args)}`);
         break;
 
       case 'tool_end':
@@ -980,7 +1186,7 @@ export default function App() {
           )
         );
         setMessages(prev => prev.map(message => ({ ...message, toolTraces: message.toolTraces?.map(trace => trace.toolCallId === data.toolCallId ? { ...trace, status: data.error ? 'error' : 'success', result: data.result, error: data.error } : trace) })));
-        addTerminalLog(`${data.error ? '❌' : '✅'} Tool [${data.toolName}] Finished`);
+        addTerminalLog(`[TOOL] ${data.error ? 'Failed' : 'Completed'}: [${data.toolName}]`);
         fetchWorkspaceFiles();
         break;
 
@@ -1009,12 +1215,13 @@ export default function App() {
         setActiveToolTraces([]);
         activeToolTracesRef.current = [];
         setStatus('idle');
+        setStatusDetail('Ready');
         break;
 
       case 'error':
         setStatus('error');
         setStatusDetail(data.message || 'Request failed');
-        addTerminalLog(`❌ Server Error: ${data.message}`);
+        addTerminalLog(`[ERROR] Server: ${data.message}`);
         break;
     }
   };
@@ -1027,7 +1234,7 @@ export default function App() {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       setStatus('error');
       setStatusDetail('Backend offline');
-      addTerminalLog('⚠️ Cannot send command while the backend is offline.');
+      addTerminalLog('[WARN] Cannot send command while the backend is offline.');
       return;
     }
 
@@ -1038,10 +1245,10 @@ export default function App() {
       timestamp: Date.now(),
     };
 
-
+    setMessages((prev) => [...prev, userMsg]);
     setStatus('thinking');
     setStatusDetail('Processing query...');
-    addTerminalLog(`💬 User: ${prompt}`);
+    addTerminalLog(`[USER] ${prompt}`);
 
     wsRef.current.send(
       JSON.stringify({
@@ -1058,24 +1265,24 @@ export default function App() {
 
   const handleRollbackFile = async () => {
     try {
-      addTerminalLog('🔄 Rolling back latest file edits...');
+      addTerminalLog('[ROLLBACK] Rolling back latest file edits...');
       const res = await fetch(`${API_BASE}/api/rollback`, { method: 'POST' });
       if (!res.ok) throw new Error(`Rollback request failed (${res.status})`);
       const data = await res.json();
       if (data.success) {
-        addTerminalLog(`✅ ${data.message}`);
+        addTerminalLog(`[SUCCESS] ${data.message}`);
         fetchWorkspaceFiles();
       } else {
-        addTerminalLog(`⚠️ ${data.message}`);
+        addTerminalLog(`[WARN] ${data.message}`);
       }
     } catch (err: any) {
-      addTerminalLog(`❌ Rollback error: ${err.message}`);
+      addTerminalLog(`[ERROR] Rollback: ${err.message}`);
     }
   };
 
   const handleExecuteCommand = (command: QuickCommand) => {
     setShowCommandPalette(false);
-    addTerminalLog(`⚡ Executed Command: ${command.command} (${command.label})`);
+    addTerminalLog(`[EXEC] ${command.command} (${command.label})`);
 
     if (command.command === '/open') {
       handlePickFolder();
@@ -1169,37 +1376,67 @@ export default function App() {
     ));
   };
 
-  const statusLabel = status === 'thinking'
-    ? '⚡ Thinking…'
-    : status === 'acting'
-    ? '⚙️ Executing…'
-    : status === 'waiting_approval'
-    ? '⏸ Waiting for approval…'
-    : status === 'self_correcting'
-    ? '🔧 Self-correcting…'
-    : status === 'error'
-    ? '⚠️ Error'
-    : status === 'done'
-    ? '✓ Completed'
-    : isBackendConnected
-    ? '🍓 Alisa: Ready'
-    : statusDetail === 'Backend offline'
-    ? '⚠️ Backend offline'
-    : '⏳ Connecting…';
-
-  const statusDot = status === 'error'
-    ? 'bg-[#ff5f56]'
-    : status === 'thinking'
-    ? 'bg-[#ffaa00] animate-ping'
-    : status === 'acting'
-    ? 'bg-[#38bdf8] animate-pulse'
-    : status === 'waiting_approval'
-    ? 'bg-[#ffbd2e] animate-pulse'
-    : status === 'self_correcting'
-    ? 'bg-[#c084fc] animate-pulse'
-    : !isBackendConnected
-    ? 'bg-[#ffbd2e]'
-    : 'bg-[#27c93f]';
+  const renderStatusIndicator = () => {
+    switch (status) {
+      case 'thinking':
+        return (
+          <span className="flex items-center gap-1.5 font-medium text-[#38bdf8]">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <span>Thinking…</span>
+          </span>
+        );
+      case 'acting':
+        return (
+          <span className="flex items-center gap-1.5 font-medium text-amber-300">
+            <Terminal className="h-3.5 w-3.5" />
+            <span>Executing…</span>
+          </span>
+        );
+      case 'waiting_approval':
+        return (
+          <span className="flex items-center gap-1.5 font-medium text-amber-400">
+            <AlertTriangle className="h-3.5 w-3.5" />
+            <span>Waiting for approval…</span>
+          </span>
+        );
+      case 'self_correcting':
+        return (
+          <span className="flex items-center gap-1.5 font-medium text-purple-300">
+            <Wrench className="h-3.5 w-3.5" />
+            <span>Self-correcting…</span>
+          </span>
+        );
+      case 'error':
+        return (
+          <span className="flex items-center gap-1.5 font-medium text-rose-400">
+            <AlertCircle className="h-3.5 w-3.5" />
+            <span>Error</span>
+          </span>
+        );
+      case 'done':
+        return (
+          <span className="flex items-center gap-1.5 font-medium text-emerald-300">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            <span>Completed</span>
+          </span>
+        );
+      default:
+        if (!isBackendConnected) {
+          return (
+            <span className="flex items-center gap-1.5 font-medium text-rose-400">
+              <WifiOff className="h-3.5 w-3.5" />
+              <span>Backend offline</span>
+            </span>
+          );
+        }
+        return (
+          <span className="flex items-center gap-1.5 font-medium text-emerald-400">
+            <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.5)]" />
+            <span>Alisa: Ready</span>
+          </span>
+        );
+    }
+  };
 
   const visibleStatusDetail = statusDetail
     && !['Ready', 'Backend connected', 'Backend offline', 'Connecting to backend…'].includes(statusDetail)
@@ -1216,6 +1453,99 @@ export default function App() {
     .slice(-8)
     .reverse();
   const updateBannerVisible = !updateNoticeDismissed && ['available', 'downloading', 'downloaded', 'error'].includes(updateState.status);
+  const activeProvider = providers.find((p) => p.id === activeProviderId) || providers[0];
+  const selectedProvider = isAddingNewProvider
+    ? null
+    : providers.find((p) => p.id === selectedProviderId) || activeProvider;
+
+  // Slash Commands Catalog (OpenCode & Project Alisa)
+  const baseSlashCommands = [
+    { name: '/init', description: 'guided AGENTS.md setup', prompt: 'ช่วยสร้างและตั้งค่าไฟล์ AGENTS.md สำหรับแนะนำ AI ประจำโปรเจกต์นี้ให้หน่อย' },
+    { name: '/review', description: 'review changes [commit|branch|pr], defaults to uncommitted', prompt: 'ช่วย Review การเปลี่ยนแปลงของโค้ดในโปรเจกต์นี้ให้หน่อย (Git diff review)' },
+    { name: '/goal', description: 'Set a session-scoped goal and auto-continue until complete.', prompt: '/goal ' },
+    { name: '/customize-opencode', description: 'Use ONLY when the user is editing or creating configuration', prompt: '/customize-opencode ' },
+    { name: '/find-skills', description: 'Helps users discover and install agent skills when they ask questions', prompt: '/find-skills ' },
+    { name: '/webapp-testing', description: 'Toolkit for interacting with and testing local web applications using Playwright', prompt: '/webapp-testing ' },
+    { name: '/xlsx', description: 'Use this skill any time a spreadsheet file is the primary input or output', prompt: '/xlsx ' },
+    { name: '/web-component-design', description: 'Master React, Vue, and Svelte component patterns including CSS-in-JS', prompt: '/web-component-design ' },
+    { name: '/web-artifacts-builder', description: 'Suite of tools for creating elaborate, multi-component HTML artifacts', prompt: '/web-artifacts-builder ' },
+    { name: '/web-design-guidelines', description: 'Review UI code for Web Interface Guidelines compliance', prompt: '/web-design-guidelines ' },
+    { name: '/open', description: 'Choose a project directory on your computer', action: 'open_folder' },
+    { name: '/clear', description: 'Start fresh session and reset conversation', action: 'new_chat' },
+    { name: '/rollback', description: 'Restore files to previous snapshot state', action: 'rollback' },
+    { name: '/inspect', description: 'Inspect project structure, frameworks, and entry points', prompt: 'ช่วยวิเคราะห์โครงสร้างโฟลเดอร์และไฟล์ของโปรเจกต์นี้ให้หน่อย' },
+    { name: '/audit', description: 'Find bugs, vulnerabilities, and security issues', prompt: 'ตรวจสอบบั๊ก ช่องโหว่ความปลอดภัย และจุดที่ควรปรับปรุงในโค้ดนี้' },
+  ];
+
+  const dynamicSlashCommands = [
+    ...baseSlashCommands,
+    ...skills
+      .filter((s) => !baseSlashCommands.some((b) => b.name === `/${s.name}`))
+      .map((s) => ({
+        name: `/${s.name}`,
+        description: s.description || `Skill: ${s.name}`,
+        prompt: `/${s.name} `,
+      })),
+  ];
+
+  const isSlashTrigger = inputPrompt.startsWith('/');
+  const slashQuery = isSlashTrigger ? inputPrompt.slice(1).toLowerCase().trim() : '';
+  const filteredSlashCommands = isSlashTrigger
+    ? dynamicSlashCommands.filter(
+        (c) =>
+          c.name.toLowerCase().includes(slashQuery) ||
+          c.description.toLowerCase().includes(slashQuery)
+      )
+    : [];
+
+  const handleExecuteSlashCommand = (cmd: { name: string; description: string; prompt?: string; action?: string }) => {
+    setSlashMenuOpen(false);
+    setShowPlusMenu(false);
+    if (cmd.action === 'open_folder') {
+      setInputPrompt('');
+      handlePickFolder();
+      return;
+    }
+    if (cmd.action === 'new_chat') {
+      setInputPrompt('');
+      handleNewChat();
+      return;
+    }
+    if (cmd.action === 'rollback') {
+      setInputPrompt('/rollback');
+      handleSendPrompt('/rollback');
+      return;
+    }
+    if (cmd.prompt) {
+      setInputPrompt(cmd.prompt);
+      textareaRef.current?.focus();
+    } else {
+      setInputPrompt(`${cmd.name} `);
+      textareaRef.current?.focus();
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    setShowPlusMenu(false);
+    const fileList = Array.from(files);
+    for (const file of fileList) {
+      if (file.type.startsWith('image/')) {
+        setInputPrompt((prev) => (prev ? `${prev}\n[Attached Image: ${file.name}]` : `[Attached Image: ${file.name}]`));
+      } else {
+        try {
+          const text = await file.text();
+          const truncated = text.length > 3000 ? text.slice(0, 3000) + '\n...[truncated]' : text;
+          setInputPrompt((prev) => (prev ? `${prev}\n\nFile [${file.name}]:\n\`\`\`\n${truncated}\n\`\`\`` : `File [${file.name}]:\n\`\`\`\n${truncated}\n\`\`\``));
+        } catch {
+          setInputPrompt((prev) => (prev ? `${prev}\n[Attached File: ${file.name}]` : `[Attached File: ${file.name}]`));
+        }
+      }
+    }
+    e.target.value = '';
+    textareaRef.current?.focus();
+  };
 
   return (
     <div className="alisa-shell flex h-screen min-h-0 flex-col bg-[#0b0d10] text-[#e7e9ee] font-sans">
@@ -1231,9 +1561,7 @@ export default function App() {
             {isSidebarOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
           </button>
 
-          <div className="alisa-brand-mark flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#f4f5f7] text-sm font-bold text-[#12151a] shadow-sm">
-            🍓
-          </div>
+          <AlisaLogo size={30} className="shrink-0" />
 
           <div className="min-w-0 leading-tight hidden sm:block">
             <div className="alisa-brand-name truncate text-sm font-semibold tracking-tight text-white">Project Alisa Studio</div>
@@ -1280,7 +1608,7 @@ export default function App() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => { navigator.clipboard.writeText(workspaceDir); addTerminalLog('📋 Copied workspace path'); }}
+                      onClick={() => { navigator.clipboard.writeText(workspaceDir); addTerminalLog('[INFO] Copied workspace path'); }}
                       className="inline-flex items-center gap-1 rounded bg-[#1e2530] px-2 py-1 text-[10px] text-[#94a3b8] hover:bg-[#2b3543] hover:text-white"
                     >
                       <Copy className="h-2.5 w-2.5" /> Copy Path
@@ -1338,14 +1666,84 @@ export default function App() {
               </div>
             )}
           </div>
+
+          {/* Active Provider Switcher Pill */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => { setShowProviderMenu((prev) => !prev); setShowProjectMenu(false); }}
+              className="flex max-w-[170px] sm:max-w-[210px] items-center gap-1.5 rounded-lg border border-[#2b3543] bg-[#161c24] px-2.5 py-1.5 text-xs font-medium text-[#c4cbd6] transition hover:border-[#4d5e75] hover:bg-[#1d2531]"
+              title={`Active API Provider: ${activeProvider?.name || 'OmniRoute'}`}
+            >
+              <Zap className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+              <span className="truncate">{activeProvider?.name || 'OmniRoute'}</span>
+              <ChevronDown className={`h-3 w-3 shrink-0 text-[#718097] transition-transform ${showProviderMenu ? 'rotate-180' : ''}`} />
+            </button>
+
+            {/* Provider Switcher Popover */}
+            {showProviderMenu && (
+              <div
+                className="absolute left-0 top-11 z-50 w-72 rounded-xl border border-[#353f4f] bg-[#161b22] p-2 shadow-[0_20px_50px_rgba(0,0,0,0.6)] backdrop-blur-xl"
+                onMouseLeave={() => setShowProviderMenu(false)}
+              >
+                <div className="flex items-center justify-between px-2 pt-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[#738297]">
+                  <span>LLM API Provider</span>
+                  <span className="text-[9px] text-[#556477]">1-Click Switch</span>
+                </div>
+                <div className="space-y-1">
+                  {providers.map((p) => {
+                    const isActive = p.id === activeProviderId;
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => handleSwitchProvider(p.id)}
+                        className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition ${
+                          isActive
+                            ? 'border border-[#38bdf8]/40 bg-[#172333] text-white font-medium shadow-sm'
+                            : 'text-[#9aa8bd] hover:bg-[#1f2634] hover:text-white'
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="truncate font-semibold">{p.name}</span>
+                            {p.id === 'omniroute' && (
+                              <span className="rounded bg-[#281a0b] px-1.5 py-0.2 text-[9px] font-bold text-amber-400">HERMES</span>
+                            )}
+                            {isActive && (
+                              <span className="rounded bg-[#0d2818] px-1.5 py-0.2 text-[9px] font-bold text-[#4ade80]">ACTIVE</span>
+                            )}
+                          </div>
+                          <div className="mt-0.5 truncate font-mono text-[10px] text-[#5c6c82]">{p.model}</div>
+                        </div>
+                        {isActive && <Check className="h-4 w-4 text-[#38bdf8] shrink-0" />}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="mt-2 border-t border-[#252f3e] pt-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowProviderMenu(false);
+                      openSettingsModal('providers');
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-[#a9b6c8] hover:bg-[#1e2531] hover:text-white"
+                  >
+                    <Sliders className="h-3.5 w-3.5 text-[#38bdf8]" />
+                    <span>Manage Providers & Endpoints…</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Center Agent Status */}
         <div className="hidden items-center gap-2 lg:flex">
-          <div className={`alisa-status-pill flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${isBackendConnected ? 'border-[#24583a] bg-[#132319] text-[#9be7b0]' : 'border-[#5b4720] bg-[#251f12] text-[#f2c56d]'}`}>
-            <span className={`h-2 w-2 rounded-full ${statusDot}`} />
-            <span>{statusLabel}</span>
-            {visibleStatusDetail && <span className="max-w-[180px] truncate text-[#7f8998]">{visibleStatusDetail}</span>}
+          <div className={`alisa-status-pill flex items-center gap-2 rounded-full border px-3.5 py-1 text-xs transition-colors ${isBackendConnected ? 'border-[#1e3a2b] bg-[#0e1c15] text-[#9be7b0]' : 'border-[#4a2424] bg-[#200f0f] text-[#fca5a5]'}`}>
+            {renderStatusIndicator()}
+            {visibleStatusDetail && <span className="max-w-[180px] truncate text-[#7f8998] border-l border-[#2e3b4d] pl-2">{visibleStatusDetail}</span>}
           </div>
         </div>
 
@@ -1382,7 +1780,7 @@ export default function App() {
 
           <button
             type="button"
-            onClick={() => { setSettingsError(null); setShowSettings(true); }}
+            onClick={() => openSettingsModal('providers')}
             className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#303846] bg-[#171c24] text-[#aab2c0] transition hover:border-[#4a5567] hover:bg-[#202733] hover:text-white"
             aria-label="Open settings"
           >
@@ -1822,14 +2220,28 @@ export default function App() {
                   <div className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 py-6 sm:px-6 sm:py-8">
                     {messages.length === 0 && !streamingContent && activeToolTraces.length === 0 && (
                       <div className="alisa-hero flex flex-1 flex-col items-center justify-start py-10 text-center sm:justify-center sm:py-16">
-                        <div className="alisa-hero-mark mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#f4f5f7] text-2xl font-bold text-[#12151a] shadow-lg">
-                          🍓
-                        </div>
+                        <AlisaLogo size={48} className="mb-4 drop-shadow-[0_4px_16px_rgba(56,189,248,0.3)]" />
                         <p className="mb-1 text-xs font-semibold uppercase tracking-[0.2em] text-[#8290a3]">Project Alisa Studio</p>
                         <h1 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">What are we building today?</h1>
                         <p className="mt-2 max-w-lg text-sm leading-6 text-[#8995a7]">
                           Alisa is grounded inside <span className="text-[#38bdf8] font-mono">{workspaceLabel}</span>. Ask to inspect files, edit code, or run commands.
                         </p>
+
+                        {!apiKeyMasked && (
+                          <div className="mt-4 flex w-full max-w-xl items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-200 shadow-sm">
+                            <div className="flex items-center gap-2.5">
+                              <KeyRound className="h-4 w-4 text-amber-400 shrink-0" />
+                              <span>ยังไม่ได้ตั้งค่า API Key — กรุณากำหนด API Key เพื่อเริ่มใช้งาน AI Model</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setShowSettings(true)}
+                              className="rounded-lg bg-amber-500/20 px-3 py-1 font-semibold text-amber-300 hover:bg-amber-500/30 transition shrink-0"
+                            >
+                              Settings
+                            </button>
+                          </div>
+                        )}
 
                         <div className="mt-6 grid w-full max-w-2xl grid-cols-1 gap-2.5 sm:grid-cols-3">
                           {[
@@ -1861,8 +2273,8 @@ export default function App() {
                     {messages.map((m, messageIndex) => (
                       <div key={m.id} className={m.role === 'user' ? 'flex justify-end' : 'flex gap-3'}>
                         {m.role === 'assistant' && (
-                          <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#f4f5f7] text-xs font-bold text-[#12151a]">
-                            🍓
+                          <div className="mt-0.5">
+                            <AlisaAvatar size="sm" />
                           </div>
                         )}
                         <div className={m.role === 'user' ? 'max-w-[85%] sm:max-w-[75%]' : 'min-w-0 max-w-[88%] sm:max-w-[78%]'}>
@@ -1894,8 +2306,9 @@ export default function App() {
                               {/* Thought / Reasoning trace */}
                               {m.thought && (
                                 <details className="rounded-xl border border-[#2b333f] bg-[#12171e] text-xs text-[#8c99aa]">
-                                  <summary className="cursor-pointer px-3 py-2 font-medium text-[#aab6c7]">
-                                    🧠 Alisa Reasoning Trace
+                                  <summary className="flex items-center gap-1.5 cursor-pointer px-3 py-2 font-medium text-[#aab6c7] hover:text-white transition">
+                                    <Brain className="h-3.5 w-3.5 text-[#38bdf8]" />
+                                    <span>Reasoning Trace</span>
                                   </summary>
                                   <div className="border-t border-[#252d38] px-3 py-2.5 whitespace-pre-wrap leading-5">
                                     {m.thought}
@@ -1905,7 +2318,7 @@ export default function App() {
 
                               {/* Message Content */}
                               <div className="rounded-2xl rounded-tl-md border border-[#252d38] bg-[#151a21] px-4 py-3.5 text-sm leading-6 text-[#e1e6ed] shadow-sm">
-                                <div className="whitespace-pre-wrap">{m.content ? renderAssistantContent(m.content) : m.toolTraces?.length ? 'Tool activity' : 'Preparing tool activity…'}</div>
+                                <div>{m.content ? renderAssistantContent(m.content) : m.toolTraces?.length ? 'Tool activity' : 'Preparing tool activity…'}</div>
                               </div>
 
                               <div className="mt-2 flex items-center gap-3">
@@ -1930,8 +2343,8 @@ export default function App() {
                     {/* Active Streaming Content */}
                     {(streamingContent || streamingThought || activeToolTraces.length > 0) && (
                       <div className="flex gap-3">
-                        <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#f4f5f7] text-xs font-bold text-[#12151a]">
-                          🍓
+                        <div className="mt-0.5">
+                          <AlisaAvatar size="sm" isThinking={true} />
                         </div>
                         <div className="min-w-0 max-w-[88%] space-y-3 sm:max-w-[78%]">
                           {activeToolTraces.map((trace, idx) => (
@@ -1945,8 +2358,9 @@ export default function App() {
 
                           {streamingThought && (
                             <details open className="rounded-xl border border-[#2b333f] bg-[#12171e] text-xs text-[#8c99aa]">
-                              <summary className="cursor-pointer px-3 py-2 font-medium text-[#aab6c7]">
-                                🧠 Thinking…
+                              <summary className="flex items-center gap-1.5 cursor-pointer px-3 py-2 font-medium text-[#aab6c7] hover:text-white transition">
+                                <Loader2 className="h-3.5 w-3.5 animate-spin text-[#38bdf8]" />
+                                <span>Thinking…</span>
                               </summary>
                               <div className="border-t border-[#252d38] px-3 py-2.5 whitespace-pre-wrap leading-5">
                                 {streamingThought}
@@ -1955,7 +2369,7 @@ export default function App() {
                           )}
 
                           {streamingContent && (
-                            <div className="rounded-2xl rounded-tl-md border border-[#252d38] bg-[#151a21] px-4 py-3.5 text-sm leading-6 text-[#e1e6ed] whitespace-pre-wrap">
+                            <div className="rounded-2xl rounded-tl-md border border-[#252d38] bg-[#151a21] px-4 py-3.5 text-sm leading-6 text-[#e1e6ed]">
                               {renderAssistantContent(streamingContent)}
                               <span className="ml-1 inline-block h-4 w-1 animate-pulse bg-[#8da4c6] align-[-2px]" />
                             </div>
@@ -1967,141 +2381,296 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Chat Composer */}
-                <div className="shrink-0 border-t border-[#252a33] bg-[#11141a] px-3 py-3 sm:px-6 sm:py-4">
-                  <div className="mx-auto max-w-4xl">
-                    <div className="alisa-composer relative rounded-2xl border border-[#303846] bg-[#151a21] shadow-[0_12px_30px_rgba(0,0,0,.2)] focus-within:border-[#53647b]">
-                      {/* Active Workspace Pill in Composer */}
-                      <div className="flex items-center justify-between border-b border-[#222832] px-3.5 py-1.5 text-xs text-[#7e8e9f]">
-                        <div className="flex items-center gap-1.5 truncate">
-                          <Folder className="h-3 w-3 text-[#38bdf8] shrink-0" />
-                          <span className="text-[11px]">Workspace:</span>
-                          <span className="font-semibold text-white truncate max-w-[280px]">{workspaceLabel}</span>
+                {/* Chat Composer (Minimalist OpenCode Style) */}
+                <div className="shrink-0 border-t border-[#1e232b] bg-[#0d0f14] px-3 py-3 sm:px-6 sm:py-4">
+                  <div className="mx-auto max-w-4xl relative">
+                    {/* Hidden file input for Ctrl+U / Images and files */}
+                    <input
+                      type="file"
+                      ref={fileInputRef}
+                      className="hidden"
+                      multiple
+                      accept="image/*,text/*,.ts,.tsx,.js,.jsx,.json,.md,.py,.rs,.html,.css"
+                      onChange={handleFileUpload}
+                    />
+
+                    {/* Slash Command Autocomplete Popover (Image 4) */}
+                    {slashMenuOpen && filteredSlashCommands.length > 0 && (
+                      <div className="absolute bottom-full mb-2.5 left-0 right-0 z-40 max-h-72 overflow-y-auto rounded-2xl border border-[#2c3340] bg-[#141820]/95 p-1.5 shadow-[0_20px_50px_rgba(0,0,0,0.7)] backdrop-blur-xl custom-scrollbar">
+                        <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[#637286]">
+                          Commands & Skills ({filteredSlashCommands.length})
+                        </div>
+                        <div className="space-y-0.5">
+                          {filteredSlashCommands.map((cmd, idx) => (
+                            <button
+                              key={cmd.name}
+                              type="button"
+                              onClick={() => handleExecuteSlashCommand(cmd)}
+                              onMouseEnter={() => setSlashSelectedIndex(idx)}
+                              className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition ${
+                                slashSelectedIndex === idx
+                                  ? 'bg-[#222936] text-white'
+                                  : 'text-[#c4cbd6] hover:bg-[#1a212b]'
+                              }`}
+                            >
+                              <span className="font-semibold font-mono text-xs text-white shrink-0">
+                                {cmd.name}
+                              </span>
+                              <span className="text-xs text-[#7f8d9f] truncate">
+                                {cmd.description}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Action (+) Popover Menu (Image 3) */}
+                    {showPlusMenu && (
+                      <div
+                        className="absolute bottom-12 left-2 z-40 w-56 overflow-hidden rounded-2xl border border-[#2b3341] bg-[#161a22] p-1.5 shadow-[0_16px_40px_rgba(0,0,0,0.6)] backdrop-blur-xl"
+                        onMouseLeave={() => setShowPlusMenu(false)}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => { setShowPlusMenu(false); fileInputRef.current?.click(); }}
+                          className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs text-[#d0d7e2] hover:bg-[#222936] hover:text-white transition"
+                        >
+                          <span className="font-medium">Images and files</span>
+                          <kbd className="text-[10px] text-[#687487] font-mono">Ctrl+U</kbd>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowPlusMenu(false);
+                            setInputPrompt('/');
+                            setSlashMenuOpen(true);
+                            setSlashSelectedIndex(0);
+                            textareaRef.current?.focus();
+                          }}
+                          className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs text-[#d0d7e2] hover:bg-[#222936] hover:text-white transition"
+                        >
+                          <span className="font-medium">Commands</span>
+                          <kbd className="text-[10px] text-[#687487] font-mono">/</kbd>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowPlusMenu(false);
+                            setInputPrompt((prev) => (prev ? `${prev} @` : '@'));
+                            textareaRef.current?.focus();
+                          }}
+                          className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs text-[#d0d7e2] hover:bg-[#222936] hover:text-white transition"
+                        >
+                          <span className="font-medium">Context</span>
+                          <kbd className="text-[10px] text-[#687487] font-mono">@</kbd>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowPlusMenu(false);
+                            setInputPrompt('!');
+                            textareaRef.current?.focus();
+                          }}
+                          className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs text-[#d0d7e2] hover:bg-[#222936] hover:text-white transition"
+                        >
+                          <span className="font-medium">Shell command</span>
+                          <kbd className="text-[10px] text-[#687487] font-mono">!</kbd>
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Model Picker Menu */}
+                    {showModelPicker && (
+                      <div className="absolute bottom-12 left-12 z-40 w-72 overflow-hidden rounded-2xl border border-[#3a4351] bg-[#161b22] p-1.5 shadow-[0_18px_46px_rgba(0,0,0,.6)] backdrop-blur-xl">
+                        <div className="flex items-center justify-between px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[#687487]">
+                          <span>Select AI Model</span>
+                          <span className="text-[9px] text-[#556477]">{activeProvider?.name || 'OmniRoute'}</span>
+                        </div>
+                        <div className="space-y-0.5">
+                          {MODEL_OPTIONS.map((option) => (
+                            <button
+                              key={option.id}
+                              type="button"
+                              onClick={() => handleSelectModel(option.id)}
+                              className={`flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition ${
+                                model === option.id ? 'bg-[#222936] text-white' : 'text-[#c0c9d6] hover:bg-[#1a212b] hover:text-white'
+                              }`}
+                            >
+                              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-[#273241] text-[#38bdf8]">
+                                <Sparkles className="h-3.5 w-3.5" />
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-xs font-semibold">{option.label}</span>
+                                <span className="block truncate text-[10px] text-[#7f8da1]">{option.description}</span>
+                              </span>
+                              {model === option.id && <Check className="h-3.5 w-3.5 shrink-0 text-[#38bdf8]" />}
+                            </button>
+                          ))}
                         </div>
                         <button
                           type="button"
-                          onClick={handlePickFolder}
-                          className="text-[11px] text-[#38bdf8] hover:underline"
+                          onClick={() => { setShowModelPicker(false); openSettingsModal('providers'); }}
+                          className="mt-1 flex w-full items-center gap-2 border-t border-[#252e3c] px-2.5 py-2 text-left text-xs font-medium text-[#9aa8ba] hover:text-white"
                         >
-                          Change folder
+                          <Sliders className="h-3.5 w-3.5 text-[#38bdf8]" />
+                          <span>Manage providers & endpoints…</span>
                         </button>
                       </div>
+                    )}
 
-                      <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-[#9aa7b9]">
-                        <label className="flex items-center gap-2">Mode
-                          <select aria-label="Agent mode" value={agentMode} disabled={['thinking', 'acting', 'waiting_approval'].includes(status)} onChange={e => setAgentMode(e.target.value as 'ask' | 'code')} className="rounded border border-[#39475b] bg-[#151c27] px-2 py-1 text-white">
-                            <option value="ask">Ask · read only</option><option value="code">Code · edit workspace</option>
-                          </select>
-                        </label>
-                        <span>{agentMode === 'ask' ? 'Reads files; no edits or terminal.' : 'File edits stay in this workspace. Shell commands need approval.'}</span>
+                    {/* Shell Permission Approval Alert */}
+                    {approval && (
+                      <div role="alert" className="mb-3 rounded-2xl border border-amber-600/50 bg-[#282015] p-3.5 text-sm text-amber-100 shadow-lg">
+                        <strong className="text-amber-200">Allow {approval.action}?</strong>
+                        <p className="my-1.5 text-xs text-amber-200/80">This command runs with your OS permissions, outside file-tool restrictions.</p>
+                        <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded-xl bg-black/40 p-2 font-mono text-xs">{String(approval.details.command || JSON.stringify(approval.details))}</pre>
+                        <div className="mt-3 flex gap-2">
+                          {[true, false].map((approved) => (
+                            <button
+                              type="button"
+                              key={String(approved)}
+                              className={`rounded-xl px-4 py-1.5 text-xs font-semibold transition ${
+                                approved
+                                  ? 'bg-amber-500 text-black hover:bg-amber-400'
+                                  : 'border border-amber-600/60 bg-transparent text-amber-200 hover:bg-white/5'
+                              }`}
+                              onClick={() => {
+                                wsRef.current?.send(JSON.stringify({ type: 'approval_response', resolveId: approval.resolveId, approved }));
+                                setApproval(null);
+                              }}
+                            >
+                              {approved ? 'Allow once' : 'Deny'}
+                            </button>
+                          ))}
+                        </div>
                       </div>
-                      {approval && <div role="alert" className="mb-3 rounded-xl border border-amber-600 bg-[#282015] p-3 text-sm text-amber-100">
-                        <strong>Allow {approval.action}?</strong>
-                        <p className="my-2 text-xs">This command runs with your OS permissions, outside file-tool restrictions.</p>
-                        <pre className="max-h-32 overflow-auto whitespace-pre-wrap text-xs">{String(approval.details.command || JSON.stringify(approval.details))}</pre>
-                        <div className="mt-3 flex gap-2">{[true, false].map(approved => <button type="button" key={String(approved)} className="rounded border border-amber-600 px-3 py-1" onClick={() => {
-                          wsRef.current?.send(JSON.stringify({ type: 'approval_response', resolveId: approval.resolveId, approved })); setApproval(null);
-                        }}>{approved ? 'Allow once' : 'Deny'}</button>)}</div>
-                      </div>}
+                    )}
+
+                    {/* Composer Main Box (Image 2) */}
+                    <div className="alisa-composer group relative rounded-2xl border border-[#2b3341] bg-[#14171f] shadow-[0_12px_36px_rgba(0,0,0,0.35)] transition-all focus-within:border-[#4d5c73] focus-within:shadow-[0_16px_40px_rgba(0,0,0,0.45)]">
                       <textarea
+                        ref={textareaRef}
                         rows={3}
                         value={inputPrompt}
-                        onChange={(e) => setInputPrompt(e.target.value)}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setInputPrompt(val);
+                          if (val.startsWith('/')) {
+                            setSlashMenuOpen(true);
+                            setSlashSelectedIndex(0);
+                          } else {
+                            setSlashMenuOpen(false);
+                          }
+                        }}
                         onKeyDown={(e) => {
+                          if (slashMenuOpen && filteredSlashCommands.length > 0) {
+                            if (e.key === 'ArrowDown') {
+                              e.preventDefault();
+                              setSlashSelectedIndex((prev) => (prev + 1) % filteredSlashCommands.length);
+                              return;
+                            }
+                            if (e.key === 'ArrowUp') {
+                              e.preventDefault();
+                              setSlashSelectedIndex((prev) => (prev - 1 + filteredSlashCommands.length) % filteredSlashCommands.length);
+                              return;
+                            }
+                            if (e.key === 'Enter' || e.key === 'Tab') {
+                              e.preventDefault();
+                              const selected = filteredSlashCommands[slashSelectedIndex];
+                              if (selected) {
+                                handleExecuteSlashCommand(selected);
+                              }
+                              return;
+                            }
+                            if (e.key === 'Escape') {
+                              e.preventDefault();
+                              setSlashMenuOpen(false);
+                              return;
+                            }
+                          }
+
+                          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'u') {
+                            e.preventDefault();
+                            fileInputRef.current?.click();
+                            return;
+                          }
+
                           if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                             e.preventDefault();
                             handleSendPrompt();
                           }
                         }}
-                        placeholder={`Ask Alisa to code, inspect, or modify files in ${workspaceLabel}…`}
+                        placeholder="Ask anything, / for commands, @ for context..."
                         aria-label="Message Alisa"
-                        className="min-h-[85px] w-full resize-none bg-transparent px-4 py-3 text-sm leading-6 text-white placeholder-[#687487] focus:outline-none"
+                        className="min-h-[80px] w-full resize-none bg-transparent px-4 pt-3.5 pb-2 text-sm leading-6 text-white placeholder-[#687487] focus:outline-none"
                       />
 
-                      {/* Composer Controls */}
-                      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#222832] px-3 py-2">
-                        <div className="flex min-w-0 items-center gap-2">
+                      {/* Composer Bottom Toolbar (Image 2 & 3) */}
+                      <div className="flex items-center justify-between px-3 pb-2.5 pt-1">
+                        <div className="flex items-center gap-1.5">
+                          {/* Plus Action Button */}
                           <button
                             type="button"
-                            onClick={() => setShowModelPicker((open) => !open)}
-                            className="alisa-model-trigger inline-flex min-w-0 items-center gap-1.5 rounded-lg bg-[#202733] px-2.5 py-1.5 text-xs font-medium text-[#c3d0e2] transition hover:bg-[#293341] hover:text-white"
+                            onClick={() => {
+                              setShowPlusMenu((prev) => !prev);
+                              setShowModelPicker(false);
+                            }}
+                            className={`flex h-7 w-7 items-center justify-center rounded-lg transition ${
+                              showPlusMenu ? 'bg-[#242b38] text-white' : 'text-[#8896a8] hover:bg-[#202734] hover:text-white'
+                            }`}
+                            title="Add files, commands, context (+)"
                           >
-                            <Sparkles className="h-3.5 w-3.5 shrink-0 text-[#c6a15a]" />
-                            <span className="max-w-[8.5rem] truncate">{selectedModel?.label || model}</span>
-                            <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-[#718097] transition-transform ${showModelPicker ? 'rotate-180' : ''}`} />
+                            <Plus className="h-4 w-4" />
                           </button>
 
+                          {/* Model Pill Trigger (Image 3: ✨ 💎 Pro Coding ∨) */}
                           <button
                             type="button"
-                            onClick={() => setShowCommandPalette(true)}
-                            className="inline-flex items-center gap-1.5 rounded-lg bg-[#202733] px-2.5 py-1.5 text-xs font-medium text-[#a9b6c8] transition hover:bg-[#293341] hover:text-white"
+                            onClick={() => {
+                              setShowModelPicker((prev) => !prev);
+                              setShowPlusMenu(false);
+                            }}
+                            className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-[#c4cbd6] hover:bg-[#202734] hover:text-white transition"
+                            title={`AI Model: ${selectedModel?.label || model}`}
                           >
-                            <Command className="h-3.5 w-3.5" />
-                            <span className="hidden sm:inline">Actions</span>
+                            <Sparkles className="h-3.5 w-3.5 text-[#818cf8]" />
+                            <Gem className="h-3.5 w-3.5 text-[#38bdf8]" />
+                            <span className="font-semibold text-white truncate max-w-[130px]">
+                              {selectedModel?.label?.replace('Auto — ', '') || model.split('/').pop() || 'Pro Coding'}
+                            </span>
+                            <ChevronDown className={`h-3 w-3 text-[#718097] transition-transform ${showModelPicker ? 'rotate-180' : ''}`} />
                           </button>
-
-                          <span className="hidden items-center gap-1.5 rounded-lg bg-[#202733] px-2.5 py-1.5 text-xs text-[#8d9aae] sm:inline-flex">
-                            <Puzzle className="h-3.5 w-3.5 text-[#c6a15a]" /> {activeSkillNames.length} skills
-                          </span>
                         </div>
 
+                        {/* Send / Stop Button (Image 2, 3, 4: ↑) */}
                         <div className="flex items-center gap-2">
-                          <span className="hidden text-[11px] text-[#637083] sm:inline">
-                            Enter to send · Shift+Enter for newline
-                          </span>
                           {isBusy ? (
                             <button
                               type="button"
                               onClick={handleAbortTask}
-                              className="inline-flex items-center gap-1.5 rounded-lg bg-[#3a2025] px-3.5 py-1.5 text-xs font-semibold text-[#f2a2aa] transition hover:bg-[#4a252c]"
+                              className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#3a2025] text-[#f2a2aa] hover:bg-[#4a252c] transition"
+                              title="Stop task"
                             >
-                              <Square className="h-3.5 w-3.5 fill-current" /> Stop
+                              <Square className="h-3.5 w-3.5 fill-current" />
                             </button>
                           ) : (
                             <button
                               type="button"
                               onClick={() => handleSendPrompt()}
                               disabled={!inputPrompt.trim() || !isBackendConnected}
-                              className="alisa-primary-action inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-semibold text-[#13161b] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"
+                              className={`flex h-8 w-8 items-center justify-center rounded-xl transition ${
+                                inputPrompt.trim() && isBackendConnected
+                                  ? 'bg-[#38bdf8] text-[#0b131e] hover:bg-[#60a5fa] shadow-md shadow-sky-500/25'
+                                  : 'bg-[#222834] text-[#556477] cursor-not-allowed'
+                              }`}
+                              title="Send message (Enter)"
                             >
-                              <Send className="h-3.5 w-3.5" /> Send
+                              <ArrowUp className="h-4 w-4 stroke-[2.5]" />
                             </button>
                           )}
                         </div>
                       </div>
-
-                      {/* Model Picker Menu */}
-                      {showModelPicker && (
-                        <div className="alisa-model-menu absolute bottom-14 left-3 z-20 w-[min(19rem,calc(100%-1.5rem))] overflow-hidden rounded-xl border border-[#3a4351] bg-[#1b2028] p-1.5 shadow-[0_18px_46px_rgba(0,0,0,.48)]">
-                          <div className="px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#687487]">
-                            Select AI Model
-                          </div>
-                          {MODEL_OPTIONS.map((option) => (
-                            <button
-                              key={option.id}
-                              type="button"
-                              onClick={() => handleSelectModel(option.id)}
-                              className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition ${model === option.id ? 'bg-[#2b3543] text-white' : 'text-[#c0c9d6] hover:bg-[#252d38] hover:text-white'}`}
-                            >
-                              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[#273241] text-[#c6a15a]">
-                                <Sparkles className="h-3.5 w-3.5" />
-                              </span>
-                              <span className="min-w-0 flex-1">
-                                <span className="block truncate text-xs font-medium">{option.label}</span>
-                                <span className="block truncate text-[10px] text-[#7f8da1]">{option.description}</span>
-                              </span>
-                              {model === option.id && <Check className="h-3.5 w-3.5 shrink-0 text-[#7ee787]" />}
-                            </button>
-                          ))}
-                          <button
-                            type="button"
-                            onClick={() => { setShowModelPicker(false); setShowSettings(true); }}
-                            className="mt-1 flex w-full items-center gap-2 border-t border-[#303846] px-2.5 py-2 text-left text-xs font-medium text-[#9aa8ba] hover:text-white"
-                          >
-                            <Sliders className="h-3.5 w-3.5" /> Manage custom keys & endpoint
-                          </button>
-                        </div>
-                      )}
                     </div>
                   </div>
                 </div>
@@ -2549,117 +3118,359 @@ export default function App() {
           role="presentation"
           onMouseDown={(e) => { if (e.target === e.currentTarget) setShowSettings(false); }}
         >
-          <form
-            onSubmit={(event) => { event.preventDefault(); handleSaveConfig(); }}
-            className="w-full max-w-lg rounded-2xl border border-[#3a4351] bg-[#151a21] p-5 shadow-[0_24px_70px_rgba(0,0,0,.6)] sm:p-6"
+          <div
+            className="w-full max-w-2xl max-h-[88vh] flex flex-col overflow-hidden rounded-2xl border border-[#3a4351] bg-[#151a21] shadow-[0_24px_70px_rgba(0,0,0,.6)]"
             role="dialog"
           >
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#b8a2da]">Configuration</p>
-                <h2 className="mt-1 text-lg font-bold text-white">Studio Settings</h2>
-                <p className="mt-1 text-sm text-[#8995a7]">Configure LLM provider endpoint, keys, and workspace.</p>
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-[#262f3c] px-5 py-4 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#202734] text-[#38bdf8]">
+                  <Sliders className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-white">Studio Settings</h2>
+                  <p className="text-xs text-[#8995a7]">Manage LLM API providers, endpoints, and workspace</p>
+                </div>
               </div>
               <button
                 type="button"
                 onClick={() => setShowSettings(false)}
-                className="p-1 rounded-md text-[#8290a3] hover:text-white"
+                className="p-1.5 rounded-lg text-[#8290a3] hover:bg-[#202733] hover:text-white"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
 
-            <div className="mt-5 space-y-3.5">
-              <div>
-                <label htmlFor="settings-api-key" className="text-xs font-medium text-[#a9b6c8]">API Key</label>
-                <input
-                  id="settings-api-key"
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={apiKeyMasked ? `Stored key (${apiKeyMasked}) · type new key to replace` : 'Enter API key (OpenRouter / OpenAI)'}
-                  className="mt-1.5 w-full rounded-xl border border-[#303846] bg-[#0d1015] px-3.5 py-2.5 text-xs text-white outline-none focus:border-[#657895]"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="settings-base-url" className="text-xs font-medium text-[#a9b6c8]">Base URL</label>
-                <input
-                  id="settings-base-url"
-                  type="url"
-                  value={baseURL}
-                  onChange={(e) => setBaseURL(e.target.value)}
-                  className="mt-1.5 w-full rounded-xl border border-[#303846] bg-[#0d1015] px-3.5 py-2.5 text-xs text-white outline-none focus:border-[#657895]"
-                />
-              </div>
-
-              <div>
-                <button type="button" disabled={isTestingProvider} className="rounded-lg border border-[#3b485b] px-3 py-2 text-xs text-white disabled:opacity-50" onClick={async () => {
-                  setIsTestingProvider(true); setProviderTest('Testing saved provider…');
-                  try {
-                    const res = await fetch(`${API_BASE}/api/provider/test`, { method: 'POST' });
-                    const data = await res.json(); if (!res.ok) throw new Error(data.error);
-                    setProviderModels(data.models); setProviderTest(data.message);
-                  } catch (err) { setProviderTest(err instanceof Error ? err.message : 'Connection failed'); }
-                  finally { setIsTestingProvider(false); }
-                }}>Test saved connection</button>
-                <p className="mt-2 text-xs text-[#9aa7b9]" role="status">{providerTest || 'Save changed settings first, then test the connection.'}</p>
-              </div>
-              <div>
-                <label htmlFor="settings-model" className="text-xs font-medium text-[#a9b6c8]">Model Identifier</label>
-                <input
-                  id="settings-model" list="provider-models"
-                  type="text"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  className="mt-1.5 w-full rounded-xl border border-[#303846] bg-[#0d1015] px-3.5 py-2.5 text-xs text-white outline-none focus:border-[#657895]"
-                />
-              </div>
-
-              <div>
-                <datalist id="provider-models">{providerModels.map(id => <option key={id} value={id} />)}</datalist>
-                <label htmlFor="settings-workspace" className="text-xs font-medium text-[#a9b6c8]">Active Workspace Directory</label>
-                <div className="mt-1.5 flex gap-2">
-                  <input
-                    id="settings-workspace"
-                    type="text"
-                    value={workspaceDir}
-                    readOnly
-                    className="min-w-0 flex-1 rounded-xl border border-[#303846] bg-[#0d1015] px-3.5 py-2.5 font-mono text-xs text-white outline-none focus:border-[#657895]"
-                  />
-                  <button
-                    type="button"
-                    onClick={handlePickFolder}
-                    className="rounded-xl border border-[#38bdf8]/40 bg-[#16212e] px-3 py-2.5 text-xs font-medium text-[#38bdf8] hover:bg-[#202e40]"
-                  >
-                    Browse…
-                  </button>
-                </div>
-              </div>
+            {/* Tab Bar */}
+            <div className="flex border-b border-[#262f3c] bg-[#11151c] px-5 shrink-0">
+              <button
+                type="button"
+                onClick={() => setSettingsTab('providers')}
+                className={`flex items-center gap-2 border-b-2 py-3 px-3 text-xs font-semibold transition ${
+                  settingsTab === 'providers'
+                    ? 'border-[#38bdf8] text-[#38bdf8]'
+                    : 'border-transparent text-[#7e8d9f] hover:text-[#c4cbd6]'
+                }`}
+              >
+                <Zap className="h-3.5 w-3.5 text-amber-400" />
+                <span>API Providers & Gateways</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setSettingsTab('workspace')}
+                className={`flex items-center gap-2 border-b-2 py-3 px-3 text-xs font-semibold transition ${
+                  settingsTab === 'workspace'
+                    ? 'border-[#38bdf8] text-[#38bdf8]'
+                    : 'border-transparent text-[#7e8d9f] hover:text-[#c4cbd6]'
+                }`}
+              >
+                <Folder className="h-3.5 w-3.5 text-[#38bdf8]" />
+                <span>Active Workspace</span>
+              </button>
             </div>
 
-            {settingsError && (
-              <div className="mt-4 rounded-xl border border-[#59343b] bg-[#27181d] px-3 py-2 text-xs text-[#f0a9b1]">
-                {settingsError}
-              </div>
-            )}
+            {/* Tab Content */}
+            <div className="flex-1 overflow-y-auto p-5 custom-scrollbar">
+              {settingsTab === 'providers' ? (
+                <div className="space-y-4">
+                  {/* Providers Grid / Selector */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-semibold uppercase tracking-wider text-[#7e8d9f]">
+                        Available Providers ({providers.length})
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleStartAddProvider}
+                        className="inline-flex items-center gap-1 rounded-lg border border-[#38bdf8]/40 bg-[#16212e] px-2.5 py-1 text-xs font-semibold text-[#38bdf8] hover:bg-[#202e40]"
+                      >
+                        <Plus className="h-3.5 w-3.5" /> Add Custom Provider
+                      </button>
+                    </div>
 
-            <div className="mt-6 flex justify-end gap-2 border-t border-[#2b333f] pt-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {providers.map((p) => {
+                        const isActive = p.id === activeProviderId;
+                        const isSelected = !isAddingNewProvider && p.id === (selectedProvider?.id || selectedProviderId);
+                        return (
+                          <div
+                            key={p.id}
+                            onClick={() => handleSelectProviderInSettings(p.id)}
+                            className={`group relative flex flex-col justify-between rounded-xl border p-3 text-left transition cursor-pointer ${
+                              isSelected
+                                ? 'border-[#38bdf8] bg-[#1a2330]'
+                                : 'border-[#293240] bg-[#12161e] hover:border-[#3d495c] hover:bg-[#161c26]'
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-1.5 font-semibold text-white text-xs">
+                                  <Server className="h-3.5 w-3.5 text-[#38bdf8] shrink-0" />
+                                  <span className="truncate">{p.name}</span>
+                                </div>
+                                <div className="mt-1 truncate font-mono text-[10px] text-[#718096]">{p.baseURL}</div>
+                                <div className="mt-0.5 truncate font-mono text-[10px] text-[#556477]">Model: {p.model}</div>
+                              </div>
+                              <div className="flex flex-col items-end gap-1 shrink-0">
+                                {isActive ? (
+                                  <span className="rounded bg-[#0d2818] px-1.5 py-0.5 text-[9px] font-bold text-[#4ade80]">ACTIVE</span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); handleSwitchProvider(p.id); }}
+                                    className="rounded bg-[#202937] hover:bg-[#38bdf8] hover:text-[#0b131e] px-2 py-0.5 text-[10px] font-semibold text-[#a0afc4] transition"
+                                    title="Set as active provider"
+                                  >
+                                    Activate
+                                  </button>
+                                )}
+                                {p.hasKey && (
+                                  <span className="text-[9px] font-mono text-[#718096] flex items-center gap-0.5">
+                                    <KeyRound className="h-2.5 w-2.5" /> Key set
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Provider Editor Section */}
+                  <form onSubmit={handleSaveCurrentProvider} className="rounded-xl border border-[#2b3543] bg-[#12161e] p-4 space-y-3.5">
+                    <div className="flex items-center justify-between border-b border-[#222b37] pb-2.5">
+                      <div className="flex items-center gap-2">
+                        <Zap className="h-4 w-4 text-amber-400" />
+                        <span className="text-xs font-bold text-white">
+                          {isAddingNewProvider ? 'Configure New Custom Provider' : `Edit: ${selectedProvider?.name || 'Provider'}`}
+                        </span>
+                        {selectedProvider?.id === activeProviderId && (
+                          <span className="rounded bg-[#0d2818] px-1.5 py-0.2 text-[9px] font-bold text-[#4ade80]">ACTIVE PROVIDER</span>
+                        )}
+                        {selectedProvider?.isPreset && (
+                          <span className="rounded bg-[#1a2332] px-1.5 py-0.2 text-[9px] font-semibold text-[#7e8d9f]">BUILT-IN</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {!isAddingNewProvider && selectedProvider && selectedProvider.id !== activeProviderId && (
+                          <button
+                            type="button"
+                            onClick={() => handleSwitchProvider(selectedProvider.id)}
+                            className="inline-flex items-center gap-1 rounded-lg bg-[#38bdf8] px-2.5 py-1 text-xs font-semibold text-[#0b131e] hover:bg-[#60a5fa]"
+                          >
+                            <Zap className="h-3 w-3" /> Set Active
+                          </button>
+                        )}
+                        {!isAddingNewProvider && selectedProvider && !selectedProvider.isPreset && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteCurrentProvider(selectedProvider.id)}
+                            className="p-1 rounded text-[#718096] hover:text-[#f87171]"
+                            title="Delete custom provider"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs font-medium text-[#a9b6c8]">Provider Display Name</label>
+                        <input
+                          type="text"
+                          value={editProviderName}
+                          onChange={(e) => setEditProviderName(e.target.value)}
+                          placeholder="e.g. Local OmniRoute or vLLM"
+                          className="mt-1.5 w-full rounded-xl border border-[#303846] bg-[#0b0e13] px-3 py-2 text-xs text-white outline-none focus:border-[#657895]"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-[#a9b6c8]">Default Model Identifier</label>
+                        <input
+                          type="text"
+                          list="provider-discovered-models"
+                          value={editProviderModel}
+                          onChange={(e) => setEditProviderModel(e.target.value)}
+                          placeholder="e.g. auto/best-coding or deepseek-chat"
+                          className="mt-1.5 w-full rounded-xl border border-[#303846] bg-[#0b0e13] px-3 py-2 text-xs text-white outline-none focus:border-[#657895]"
+                        />
+                        <datalist id="provider-discovered-models">
+                          {providerModels.map((m) => <option key={m} value={m} />)}
+                        </datalist>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-medium text-[#a9b6c8]">Base URL (OpenAI-compatible /v1)</label>
+                      <input
+                        type="url"
+                        value={editProviderBaseURL}
+                        onChange={(e) => setEditProviderBaseURL(e.target.value)}
+                        placeholder="http://100.84.157.69:10009/v1 or https://openrouter.ai/api/v1"
+                        className="mt-1.5 w-full rounded-xl border border-[#303846] bg-[#0b0e13] px-3 py-2 text-xs text-white outline-none focus:border-[#657895]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-medium text-[#a9b6c8]">API Key</label>
+                      <input
+                        type="password"
+                        value={editProviderApiKey}
+                        onChange={(e) => setEditProviderApiKey(e.target.value)}
+                        placeholder={
+                          selectedProvider?.apiKeyMasked
+                            ? `Key saved (${selectedProvider.apiKeyMasked}) · leave blank to keep, or type new key`
+                            : 'Enter API key (leave blank for local Ollama / Hermes)'
+                        }
+                        className="mt-1.5 w-full rounded-xl border border-[#303846] bg-[#0b0e13] px-3 py-2 text-xs text-white outline-none focus:border-[#657895]"
+                      />
+                    </div>
+
+                    {/* Test & Save Controls */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#222b37] pt-3">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={isTestingProvider || !editProviderBaseURL}
+                          onClick={handleTestConnection}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-[#3b485b] bg-[#1a212b] px-3 py-1.5 text-xs font-medium text-white transition hover:bg-[#242e3d] disabled:opacity-50"
+                        >
+                          {isTestingProvider ? <Loader2 className="h-3.5 w-3.5 animate-spin text-[#38bdf8]" /> : <Wifi className="h-3.5 w-3.5 text-[#38bdf8]" />}
+                          <span>{isTestingProvider ? 'Testing…' : 'Test Endpoint Connection'}</span>
+                        </button>
+                        {providerTest && (
+                          <span className={`text-[11px] font-medium ${providerTest.includes('Error') || providerTest.includes('Failed') ? 'text-[#f87171]' : 'text-[#4ade80]'}`}>
+                            {providerTest}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {isAddingNewProvider && (
+                          <button
+                            type="button"
+                            onClick={() => { setIsAddingNewProvider(false); handleSelectProviderInSettings(activeProviderId); }}
+                            className="rounded-lg px-3 py-1.5 text-xs text-[#8995a7] hover:text-white"
+                          >
+                            Cancel
+                          </button>
+                        )}
+                        <button
+                          type="submit"
+                          className="rounded-lg bg-[#38bdf8] px-4 py-1.5 text-xs font-semibold text-[#0b131e] hover:bg-[#60a5fa] transition"
+                        >
+                          {isAddingNewProvider ? 'Add & Activate' : 'Save Provider Profile'}
+                        </button>
+                      </div>
+                    </div>
+                  </form>
+
+                  {providerActionNotice && (
+                    <div className="rounded-xl border border-[#1b4332] bg-[#0d2818] px-3.5 py-2 text-xs text-[#4ade80]">
+                      {providerActionNotice}
+                    </div>
+                  )}
+
+                  {settingsError && (
+                    <div className="rounded-xl border border-[#59343b] bg-[#27181d] px-3 py-2 text-xs text-[#f0a9b1]">
+                      {settingsError}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* Workspace Tab */
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-xs font-medium text-[#a9b6c8]">Active Workspace Directory</label>
+                    <p className="text-[11px] text-[#718096] mb-1.5">This is the local directory where Alisa inspects, reads, and writes files.</p>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={workspaceDir}
+                        readOnly
+                        className="min-w-0 flex-1 rounded-xl border border-[#303846] bg-[#0d1015] px-3.5 py-2.5 font-mono text-xs text-white outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={handlePickFolder}
+                        className="rounded-xl border border-[#38bdf8]/40 bg-[#16212e] px-4 py-2.5 text-xs font-semibold text-[#38bdf8] hover:bg-[#202e40]"
+                      >
+                        Browse Folder…
+                      </button>
+                    </div>
+                  </div>
+
+                  {recentWorkspaces.length > 0 && (
+                    <div>
+                      <div className="text-xs font-semibold uppercase tracking-wider text-[#7e8d9f] mb-2">
+                        Recent Workspaces ({recentWorkspaces.length})
+                      </div>
+                      <div className="space-y-1 max-h-56 overflow-y-auto custom-scrollbar">
+                        {recentWorkspaces.map((p) => {
+                          const isCur = p === workspaceDir;
+                          const name = p.split(/[\\/]/).filter(Boolean).pop() || p;
+                          return (
+                            <div
+                              key={p}
+                              onClick={() => handleSwitchToWorkspace(p)}
+                              className={`flex items-center justify-between rounded-xl border p-2.5 text-xs transition cursor-pointer ${
+                                isCur
+                                  ? 'border-[#38bdf8]/50 bg-[#16212e] text-white'
+                                  : 'border-[#28313e] bg-[#12161e] text-[#a0afc4] hover:bg-[#1a212b] hover:text-white'
+                              }`}
+                            >
+                              <div className="min-w-0 flex-1 pr-2">
+                                <div className="flex items-center gap-1.5 font-semibold">
+                                  <Folder className={`h-3.5 w-3.5 shrink-0 ${isCur ? 'text-[#38bdf8]' : 'text-[#6c7d96]'}`} />
+                                  <span className="truncate">{name}</span>
+                                  {isCur && <span className="rounded bg-[#0d2818] px-1.5 py-0.5 text-[9px] font-bold text-[#4ade80]">CURRENT</span>}
+                                </div>
+                                <div className="mt-0.5 truncate font-mono text-[10px] text-[#556477]">{p}</div>
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={(e) => handleRevealInExplorer(p, e)}
+                                  className="p-1 rounded text-[#718096] hover:text-white"
+                                  title="Reveal in Explorer"
+                                >
+                                  <ExternalLink className="h-3 w-3" />
+                                </button>
+                                {!isCur && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => handleRemoveRecent(p, e)}
+                                    className="p-1 rounded text-[#718096] hover:text-[#f87171]"
+                                    title="Remove from history"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex justify-end gap-2 border-t border-[#262f3c] bg-[#11141a] px-5 py-3 shrink-0">
               <button
                 type="button"
                 onClick={() => setShowSettings(false)}
-                className="rounded-lg border border-[#303846] bg-[#1a1f27] px-3.5 py-2 text-xs text-[#a9b6c8] hover:text-white"
+                className="rounded-lg border border-[#303846] bg-[#1a1f27] px-4 py-1.5 text-xs text-[#a9b6c8] hover:text-white"
               >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="rounded-lg bg-[#f0f2f5] px-4 py-2 text-xs font-semibold text-[#13161b] hover:bg-white"
-              >
-                Save Settings
+                Close
               </button>
             </div>
-          </form>
+          </div>
         </div>
       )}
     </div>

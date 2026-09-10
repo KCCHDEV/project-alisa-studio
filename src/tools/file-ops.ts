@@ -72,7 +72,7 @@ export const writeFileTool: ToolDefinition<z.infer<typeof WriteFileInputSchema>,
     // 1. Audit secret leakage
     const audit = gatekeeper.auditFileWrite(args.path, args.content);
     if (!audit.allowed) {
-      throw new Error(audit.reason || '🛡️ File write blocked by Security Gatekeeper');
+      throw new Error(audit.reason || '[Security Policy] File write blocked by Security Gatekeeper');
     }
 
     await getTxManager(context.cwd).writeFile(fullPath, args.content);
@@ -105,7 +105,7 @@ export const patchFileTool: ToolDefinition<z.input<typeof PatchFileInputSchema>,
     // 1. Audit secret leakage
     const audit = gatekeeper.auditFileWrite(args.path, args.new_string);
     if (!audit.allowed) {
-      throw new Error(audit.reason || '🛡️ Patch blocked by Security Gatekeeper');
+      throw new Error(audit.reason || '[Security Policy] Patch blocked by Security Gatekeeper');
     }
 
     const original = fs.readFileSync(fullPath, 'utf-8');

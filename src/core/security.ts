@@ -51,7 +51,7 @@ export class ASTSecurityGatekeeper {
       if (pattern.test(command)) {
         return {
           allowed: false,
-          reason: `🛡️ Security Gatekeeper: บล็อกคำสั่งอันตราย (${command.slice(0, 40)}...) เพื่อความปลอดภัยของระบบ`,
+          reason: `[Security Policy] บล็อกคำสั่งอันตราย (${command.slice(0, 40)}...) เพื่อความปลอดภัยของระบบ`,
         };
       }
     }
@@ -77,7 +77,7 @@ export class ASTSecurityGatekeeper {
       if (pattern.test(content)) {
         return {
           allowed: false,
-          reason: `🛡️ Security Gatekeeper: ตรวจพบคีย์ลับหรือ API Token ในโค้ด (${filePath}) โปรดใช้ Environment Variable แทนการ Hardcode`,
+          reason: `[Security Policy] ตรวจพบคีย์ลับหรือ API Token ในโค้ด (${filePath}) โปรดใช้ Environment Variable แทนการ Hardcode`,
         };
       }
     }

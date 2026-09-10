@@ -24,7 +24,7 @@ export const terminalTool: ToolDefinition<z.input<typeof TerminalInputSchema>, {
     const audit = gatekeeper.auditTerminalCommand(args.command);
     if (!audit.allowed) {
       return {
-        output: audit.reason || '🛡️ Command blocked by Security Gatekeeper',
+        output: audit.reason || '[Security Policy] Command blocked by Security Gatekeeper',
         exitCode: 1,
         durationMs: 0,
       };

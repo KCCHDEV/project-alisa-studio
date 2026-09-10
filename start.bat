@@ -2,7 +2,7 @@
 setlocal
 title Project Alisa Studio — Tauri Desktop
 echo ===================================================
-echo     🍓 Starting Project Alisa Studio (Tauri)...
+echo     Starting Project Alisa Studio (Tauri)...
 echo ===================================================
 cd /d "%~dp0"
 
