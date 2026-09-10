@@ -1,137 +1,360 @@
-# 🍓 Project Alisa Studio
+<div align="center">
 
-**A desktop AI coding and automation workspace built with TypeScript, Bun, React, and Electron.**
+<img src="public/avatar.png" width="180" alt="Project Alisa Studio mascot" />
 
-Project Alisa Studio brings streaming AI chat, local file tools, terminal execution, and project chat history into one dark desktop interface. It connects to an OpenAI-compatible model provider or gateway, including OpenRouter and OmniRoute. The repository contains the application source; model weights and provider subscriptions are not included.
+# ✦ Project Alisa Studio
 
-> โปรเจกต์ผู้ช่วยเขียนโค้ดและทำงานอัตโนมัติบนเครื่องของคุณ รองรับการตั้งค่าโมเดลผ่าน API พร้อมเครื่องมือจัดการไฟล์ เทอร์มินัล ประวัติแชต และหน้าต่างเดสก์ท็อป
+### Cute desktop AI coding workspace for real projects, local tools, and OmniRoute
 
-![Project Alisa Studio home](docs/screenshots/home-desktop.png)
+**Codex-style workflow · Streaming Agent · Local Files & Terminal · OpenAI-compatible Gateway**
 
-ดูแนวทาง visual และภาพหน้าจอเพิ่มเติมได้ที่ [docs/UI-STYLE.md](docs/UI-STYLE.md)
+[![CI](https://github.com/KCCHDEV/project-alisa-studio/actions/workflows/ci-build.yml/badge.svg)](https://github.com/KCCHDEV/project-alisa-studio/actions/workflows/ci-build.yml)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)
+![Bun](https://img.shields.io/badge/Bun-runtime-fbf0df?logo=bun&logoColor=111)
+![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=111)
+![Electron](https://img.shields.io/badge/Electron-desktop-47848F?logo=electron&logoColor=white)
+![OmniRoute](https://img.shields.io/badge/Gateway-OmniRoute-EF8FBD)
 
-## Features
+**AI / Code / Create / Automate — together.**
 
-- **Streaming chat:** displays model responses, reasoning when supplied by the provider, tool activity, and agent status.
-- **Responsive studio UI:** the Explorer becomes a mobile drawer, views stay usable on small screens, and the composer includes clear send/stop states.
-- **In-app editor:** open a workspace file, make changes, and save them through the same snapshot-protected file workflow used by the agent.
-- **Agent workflow:** a bounded multi-step loop with context preparation, context compaction, and cancellation.
-- **Workspace tools:** read, write, patch, list, and search files; execute shell commands with timeouts.
-- **Project history:** server-side chat files keyed by workspace, plus support for legacy sessions.
-- **File rollback:** snapshots before supported file write/patch operations, with a latest-change rollback action.
-- **Model configuration:** editable API key, base URL, and model identifier, with gateway presets in Settings.
-- **Skills:** discovers local Hermes-style `SKILL.md` files and creates five starter skill documents on server startup. Skill documents are instructions, not separately implemented autonomous workers.
-- **Desktop integration:** Electron window controls and Touch Bar actions/status on compatible MacBook hardware.
-- **In-app updates:** installed builds check GitHub Releases, let you download an update, and restart to install it.
-- **Packaging:** electron-builder configuration for Windows NSIS/portable builds and macOS DMG/ZIP builds.
+</div>
 
-## Requirements
+---
 
-- [Bun](https://bun.sh/) and Node.js 20 or newer; Git to clone the repository.
-- An OpenAI-compatible chat-completions endpoint and a model supporting streaming and tool calling.
-- Your own provider credentials. Provider availability, supported model IDs, and usage costs depend on your account.
+## 🌸 Project Alisa คืออะไร?
 
-## Run from source
+**Project Alisa Studio** คือ Desktop AI Coding & Automation Workspace ที่ตั้งใจทำให้ใช้งานใกล้เคียงแอป coding agent สมัยใหม่แบบ **Codex-style** มากกว่าแชตบอทธรรมดา
 
-Clone this repository with GitHub Desktop, open a terminal in its folder, and install dependencies:
+Alisa ทำงานกับโฟลเดอร์โปรเจกต์จริงบนเครื่องได้ มี Chat, Agent, File Explorer, Editor, Terminal, Skills, Project History และการเชื่อมต่อโมเดลผ่าน **OpenAI-compatible API** เช่น **OmniRoute** หรือ OpenRouter อยู่ในแอปเดียว
 
-```sh
+> เป้าหมายคือ “เปิดโปรเจกต์ → บอกเป้าหมาย → ให้ Alisa อ่านโค้ด แก้ไฟล์ รันคำสั่ง ตรวจผล และทำงานต่อจนจบ” โดยเรายังเห็นสถานะและการใช้เครื่องมือตลอดเวลา
+
+Repository นี้มีเฉพาะ source code ของแอป ไม่รวม model weights, API credits หรือ subscription ของ provider
+
+---
+
+## ✨ จุดเด่น
+
+| | Feature | รายละเอียด |
+| --- | --- | --- |
+| 🧠 | **Agent Loop** | ทำงานแบบหลายรอบ: วิเคราะห์ → เรียก tool → อ่านผล → ทำงานต่อ |
+| 💬 | **Streaming Chat** | แสดงข้อความ, reasoning field ที่ provider ส่งมา, tool activity และ status แบบ realtime |
+| 📁 | **Project Workspace** | เลือกโฟลเดอร์โปรเจกต์ แล้วอ่าน/ค้นหา/แก้ไฟล์ภายใน workspace |
+| 🛠️ | **Local Tools** | File read/write/patch/search และ terminal command พร้อม timeout |
+| ↩️ | **Snapshots / Rollback** | เก็บ snapshot ก่อน file write/patch ที่รองรับ เพื่อย้อนการแก้ไขล่าสุด |
+| 🧩 | **Skills** | โหลด Hermes-style `SKILL.md` และ workspace skills |
+| 🕘 | **Project History** | เก็บบทสนทนาตาม workspace ทำให้แต่ละโปรเจกต์มี history ของตัวเอง |
+| ⚡ | **OmniRoute Ready** | ใช้ base URL + API key + model route เช่น `auto/best-coding` |
+| 🖥️ | **Desktop App** | Electron สำหรับ Windows/macOS พร้อมระบบ in-app update ผ่าน GitHub Releases |
+| 🎀 | **Cute Developer Identity** | UI โทนมืดสำหรับเขียนโค้ด ผสม pink / blue / violet แบบ Yurachi-inspired |
+
+---
+
+## 🪄 Workflow ที่ตั้งใจให้เป็น
+
+```text
+Open Project
+    ↓
+Ask Alisa for a goal
+    ↓
+Prepare context + active skills
+    ↓
+Stream model response
+    ↓
+Tool calls?
+ ┌──┴──┐
+ No   Yes
+ │     ↓
+Done  Files / Search / Terminal
+       ↓
+   Return tool result
+       ↓
+   Continue agent loop
+```
+
+Data flow หลักของแอป:
+
+```text
+React Studio
+   ↕ HTTP / WebSocket
+Local Bun Server
+   ↓
+Agent Loop
+   ↓
+LLM Client
+   ↓
+OpenAI-compatible Gateway
+   ↓
+OmniRoute / OpenRouter / compatible provider
+
+Agent Tools
+   ├─ local files
+   ├─ project search
+   ├─ terminal
+   ├─ snapshots
+   └─ skills
+```
+
+---
+
+## 💗 OmniRoute
+
+Alisa รองรับ endpoint แบบ OpenAI-compatible อยู่แล้ว โดย LLM client ส่ง streaming request ไปที่:
+
+```text
+{BASE_URL}/chat/completions
+```
+
+ตัวอย่างการตั้งค่า OmniRoute:
+
+```text
+Base URL : http://YOUR_OMNIROUTE_HOST:PORT/v1
+API Key  : your-key
+Model    : auto/best-coding
+```
+
+ถ้า OmniRoute ของคุณเปิด API ใต้ `/v1` ให้ใส่ `/v1` ใน Base URL ด้วย
+
+### Route ที่เหมาะกับ model picker
+
+| Route | ใช้กับงาน |
+| --- | --- |
+| `auto/best-coding` | ค่าเริ่มต้นสำหรับ coding agent |
+| `auto/best-coding-fast` | coding ที่ต้องการความเร็ว |
+| `auto/best-reasoning` | debugging / architecture ยาก ๆ |
+| `auto/best-fast` | งานสั้น ๆ และตอบเร็ว |
+| `auto/best-vision` | งาน vision เมื่อ backend รองรับ |
+| `auto/best-chat` | คุยทั่วไป |
+| `auto/pro-coding` | premium coding route |
+| `auto/pro-reasoning` | premium reasoning route |
+
+บาง OmniRoute instance อาจต้องใช้ **exact provider-prefixed model ID** แทน route กลาง หาก gateway แจ้งว่า model/provider ambiguous ให้เลือก exact route ที่ instance นั้นประกาศ
+
+📘 แผนการทำ OmniRoute ให้เป็น first-class integration และ UX แบบ Codex-style อยู่ที่ **[docs/CODEX-OMNIROUTE.md](docs/CODEX-OMNIROUTE.md)**
+
+---
+
+## 🧠 Agent ปัจจุบันทำงานอย่างไร
+
+Agent ใช้ bounded ReAct-style loop โดยแต่ละ cycle จะเตรียม context, ใส่ active skills, เรียก LLM แบบ streaming, รับ tool calls, รัน tools แล้วใส่ผลกลับเข้า conversation เพื่อให้โมเดลทำงานต่อ
+
+ปัจจุบันมี:
+
+- automatic context compaction สำหรับ session ที่ยาว;
+- streamed answer text;
+- รองรับ `reasoning_content` / `thought` เมื่อ provider ส่งมา;
+- OpenAI-style streamed tool calls;
+- cancel/abort;
+- agent statuses เช่น thinking / acting / done / error;
+- file snapshots สำหรับ supported writes;
+- project-scoped chat sessions;
+- built-in + Hermes-style skills.
+
+> `subagent-orchestration` ตอนนี้เป็น **skill/instruction layer** ยังไม่ใช่ worker agent แยก process จริง ๆ
+
+---
+
+## 🎛️ หน้าหลักของแอป
+
+- **Sessions** — งานและบทสนทนาของโปรเจกต์
+- **Files** — file tree + editor
+- **Chat** — streaming conversation + agent activity
+- **Terminal** — command execution/output
+- **Skills** — เลือก skill ที่ใช้กับ agent
+- **Model Picker** — เปลี่ยน model/route เร็ว ๆ
+- **Settings** — API key, base URL, model, workspace, updater
+
+Command-style actions ที่มีใน UI เช่น:
+
+```text
+/goal       วางแผนและทำ coding goal
+/test       ทดสอบงาน
+/audit      ตรวจ security concerns
+/refactor   ปรับโครงสร้าง code
+/rollback   ย้อน supported file change ล่าสุด
+/skills     จัดการ skills
+/build      build desktop app
+/clear      ล้าง terminal logs
+```
+
+---
+
+## 🚀 Run from source
+
+### Requirements
+
+- Bun
+- Node.js 20+
+- Git
+- OpenAI-compatible chat-completions endpoint
+- model ที่รองรับ streaming; ถ้ารองรับ tool calling จะใช้งาน agent ได้เต็มกว่า
+
+### Install
+
+```bash
+git clone https://github.com/KCCHDEV/project-alisa-studio.git
+cd project-alisa-studio
 bun install --frozen-lockfile
 ```
 
-### Desktop app
+### Desktop
 
-```sh
+```bash
+bun run start:electron
+```
+
+หรือ:
+
+```bash
 bun run build
 bunx --no-install electron .
 ```
 
-Electron starts the bundled backend and loads the built UI. Open **Settings** to configure your provider and workspace before asking the agent to work.
-
 ### Web development
 
-Use two terminals in the repository folder:
+Terminal 1:
 
-```sh
-# Terminal 1: backend on port 3001
+```bash
 bun run server
 ```
 
-```sh
-# Terminal 2: Vite frontend on port 3000
+Terminal 2:
+
+```bash
 bun run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). Vite proxies API and WebSocket traffic to the backend. Run either desktop mode or the separate backend, since both use port 3001.
-
-## Model and gateway setup
-
-In **Settings**, enter the API key, base URL, exact model ID, and an existing workspace directory, then save.
-
-| Setting | Example / meaning |
-| --- | --- |
-| Base URL | `https://openrouter.ai/api/v1`, or your gateway's OpenAI-compatible API base |
-| Model | An exact identifier listed by your provider; the initial default is `deepseek/deepseek-chat` |
-| API key | Your own provider key; never include it in a commit or screenshot |
-| Workspace | The local directory where the agent should work |
-
-The client appends `/chat/completions` to the base URL. Some OmniRoute routes require a provider-prefixed model ID. Model names in the UI are suggestions and may not be enabled on every gateway.
-
-The server can read `OPENAI_API_KEY` (or `OPENROUTER_API_KEY`) and `OPENAI_BASE_URL`. A detected local Hermes configuration supplies startup defaults; saved `.ichigo-config.json` settings override startup defaults. The UI's Save action writes this local file. Keys are stored locally in plaintext, so keep the configuration private.
-
-For the CLI:
-
-```sh
-bun run cli
+```text
+Frontend : http://localhost:3000
+Backend  : http://localhost:3001
 ```
 
-The CLI uses the same API-key/base-URL environment variables and `ICHIGO_MODEL` for its model. It does not load the desktop Settings file. Type `exit` or `quit` to leave.
+---
 
-## Modules and data flow
+## ⚙️ Provider configuration
 
-`React UI → HTTP / WebSocket server → Agent loop → LLM client → tool calls → local files / shell`
+เปิด **Settings** แล้วตั้งค่า:
 
-| Path | Responsibility |
+| Setting | Example |
 | --- | --- |
-| `src/web/` | React studio, chat, settings, workspace browser, and activity display |
-| `src/server/index.ts` | HTTP API, WebSocket events, configuration, session files, and static UI serving |
-| `src/core/agent.ts` | Agent lifecycle, model requests, tool execution, and cancellation |
-| `src/core/context.ts` / `compactor.ts` | Prompt context and history compaction |
-| `src/core/security.ts` | Pattern-based checks for selected commands and secret formats |
-| `src/core/snapshot.ts` | File snapshots and in-process latest-change rollback history |
-| `src/llm/client.ts` | OpenAI-compatible streaming chat and tool-call parsing |
-| `src/tools/` | Tool registry, terminal, file operations, search, and skill loading |
-| `src/electron/` | Desktop lifecycle, preload IPC bridge, and macOS Touch Bar |
-| `src/cli/` | Terminal chat interface |
-| `public/landing.html` | Promotional page and interactive Touch Bar simulator |
-| `.github/workflows/ci-build.yml` | Windows/macOS build and artifact workflow |
+| Base URL | `http://127.0.0.1:10009/v1` |
+| Model | `auto/best-coding` |
+| API Key | key ของ gateway/provider |
+| Workspace | โฟลเดอร์โปรเจกต์ที่มีอยู่จริง |
 
-Some internal names retain the original **Ichigo Agent** name for compatibility. The public project name is **Project Alisa Studio**.
+Startup defaults รองรับ environment variables:
 
-## Build and package
+```bash
+OPENAI_API_KEY=...
+OPENAI_BASE_URL=http://127.0.0.1:10009/v1
+```
+
+รองรับ `OPENROUTER_API_KEY` เช่นกัน และ local Hermes config อาจถูกใช้เป็น startup fallback ส่วน settings ที่ save ในแอปจะ override ค่าเริ่มต้น
+
+> ตอนนี้ API key ใน desktop config ยังเก็บเป็น plaintext บนเครื่อง ควรเก็บไฟล์ config เป็น private และห้าม commit
+
+---
+
+## 📦 Build / Package
 
 | Command | Output |
 | --- | --- |
-| `bun run build` | Web assets in `dist/` and backend/Electron bundles in `dist-electron/` |
-| `bun run dist:win` | Windows installer and portable executable in `release/` |
-| `bun run dist:nsis` | Windows NSIS installer |
-| `bun run dist:mac` | macOS DMG and ZIP, configured for x64 and arm64 |
-| `bun run dist:dir` | Unpacked Windows application |
+| `bun run build` | Web + server/Electron bundles |
+| `bun run dist:win` | Windows NSIS + portable |
+| `bun run dist:nsis` | Windows installer |
+| `bun run dist:mac` | macOS DMG + ZIP |
+| `bun run dist:dir` | unpacked Windows app |
 
-Use the matching operating system for packaging. macOS signing is not configured. The GitHub Actions workflow runs for pushes to `main`, pull requests targeting `main`, and `v*` tags. A `v*` tag publishes the Windows and macOS installers to a GitHub Release, which is the source used by the installed app's updater.
+Output อยู่ใน `release/`
 
-To publish an update, bump the version in `package.json`, commit it, and push a matching tag (for example `v1.0.1`). GitHub Actions uses the default `GITHUB_TOKEN` permission to write releases. Update checks in a development run intentionally show that an installed build is required.
+Updater ของ installed app ใช้ GitHub Releases และ release tags รูปแบบ `v*`
 
-## Current limitations and local data
+---
 
-This is a local development application, not a hardened hosted service. Its backend has no authentication, uses permissive CORS, and exposes configuration and tool execution. Do not expose port 3001 to untrusted networks. Agent commands run with your operating-system permissions; review changes and work in backed-up repositories.
+## ✅ CI / Release
 
-Despite the class name `ASTSecurityGatekeeper`, the current checks use regular expressions, not AST parsing or complete syntax validation. Rollback covers supported file tools, not arbitrary terminal effects, and the in-memory rollback stack does not survive restart. Model failures currently end the task; automatic model failover and persistent retry are not implemented. macOS packaging and Touch Bar code are present, but Windows build success alone does not verify macOS behavior. Hermes skill paths currently follow a Windows-style layout.
+```text
+Pull Request
+   └─ Verify build
 
-Local configuration, chat history, snapshots, dependencies, and generated installers are excluded from Git. Relevant private paths are `.ichigo-config.json`, `config.json`, `.ichigo-sessions/`, `.alisa-sessions/`, and `.ichigo-snapshots/`.
+Push main
+   ├─ Verify build
+   ├─ Package Windows
+   └─ Package macOS
 
-## Contributing and license
+Tag v*
+   ├─ Verify build
+   ├─ Publish Windows release
+   └─ Publish macOS release
+```
 
-When reporting an issue, include the operating system, relevant command, expected result, and redacted error output. Never attach API keys or private chat history. For changes, describe the behavior and verification; run `bun run build` before submitting.
+CI ใช้ permission แบบ read-only เป็นค่าเริ่มต้น และให้ `contents: write` เฉพาะ release jobs
 
-No license has been selected for this repository yet. Public visibility does not itself grant an open-source license.
+---
+
+## 🗂️ Structure
+
+```text
+src/
+├─ web/       React studio UI
+├─ server/    local HTTP + WebSocket backend
+├─ core/      agent / context / compaction / security / snapshots
+├─ llm/       OpenAI-compatible streaming client
+├─ tools/     file / terminal / search / skill tools
+├─ electron/  desktop lifecycle / IPC / updater
+└─ cli/       terminal chat interface
+
+docs/         product + integration + visual documentation
+public/       app assets
+.github/      CI / release workflows
+```
+
+---
+
+## 🌷 Roadmap
+
+ทิศทางหลักคือทำให้ Alisa เป็น **cute but serious desktop coding agent**:
+
+- first-class OmniRoute profile;
+- Test Connection;
+- `/models` discovery พร้อม fallback;
+- grouped model picker: Coding / Reasoning / Fast / Vision / Chat;
+- exact provider-route recovery;
+- Ask / Plan / Code / Auto modes;
+- task checklist แบบ coding agent;
+- richer tool activity cards;
+- file diff review;
+- approval policy สำหรับ sensitive commands;
+- retry/backoff และ fallback route;
+- usage / latency / model telemetry แบบ local;
+- Git/worktree awareness;
+- true subagents ในอนาคต.
+
+รายละเอียด engineering roadmap: **[docs/CODEX-OMNIROUTE.md](docs/CODEX-OMNIROUTE.md)**
+
+---
+
+## 🔐 Security notes
+
+Project Alisa Studio ตอนนี้เป็น **local development application** ไม่ใช่ hardened multi-user service
+
+- อย่า expose backend port `3001` ไปยัง network ที่ไม่ไว้ใจ;
+- terminal tools ใช้สิทธิ์ของ OS user ที่เปิดแอป;
+- file endpoints ควรอยู่ภายใน active workspace;
+- rollback ไม่สามารถย้อนผลกระทบทุกอย่างจาก arbitrary terminal commands;
+- current security checks เป็น defensive helpers ไม่ใช่ complete sandbox;
+- ห้าม commit API keys, local sessions หรือ private config.
+
+---
+
+<div align="center">
+
+### 🎀 Visual direction
+
+**Dark coding canvas · soft pink · blue · violet · calm anime AI mascot**
+
+「好きなことで、もっと先の未来へ。」
+
+**Code softly. Build seriously. ✦**
+
+</div>
