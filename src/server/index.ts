@@ -1,61 +1,31 @@
+import { discoverSkills } from '../core/skills';
+import { ScheduleStore } from './schedules';
+import { gitOverview, listPullRequests } from './git';
+import { z } from 'zod';
+import { SessionStore } from './sessions';
+import { resolveWorkspacePath } from '../core/workspace';
 import { WebSocketServer, WebSocket } from 'ws';
 import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
+import { spawn } from 'child_process';
 import { Agent } from '../core/agent.ts';
 import { LLMClient, type LLMConfig } from '../llm/client.ts';
-import type { Message, AgentEvent, SessionState } from '../core/types.ts';
-import { writeFileTool } from '../tools/file-ops.ts';
+import type { AgentEvent } from '../core/types.ts';
+import { getTxManager, writeFileTool } from '../tools/file-ops.ts';
 import { terminalTool } from '../tools/terminal.ts';
 
 const PORT = Number(process.env.PORT || 3001);
 const RUNTIME_DIR = process.env.ALISA_CONFIG_DIR || process.cwd();
 const CONFIG_FILE = path.join(RUNTIME_DIR, '.ichigo-config.json');
-const SESSIONS_DIR = path.join(RUNTIME_DIR, '.ichigo-sessions');
 const ALISA_SESSIONS_DIR = path.join(RUNTIME_DIR, '.alisa-sessions');
 
 if (!fs.existsSync(RUNTIME_DIR)) {
   fs.mkdirSync(RUNTIME_DIR, { recursive: true });
 }
-if (!fs.existsSync(SESSIONS_DIR)) {
-  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-}
 if (!fs.existsSync(ALISA_SESSIONS_DIR)) {
   fs.mkdirSync(ALISA_SESSIONS_DIR, { recursive: true });
 }
-
-function getProjectSessionFile(workspaceDir: string): string {
-  const safeName = Buffer.from(workspaceDir || process.cwd()).toString('base64').replace(/[/+=]/g, '_');
-  return path.join(ALISA_SESSIONS_DIR, `project_${safeName}.json`);
-}
-
-function ensurePreinstalledSkills() {
-  const userHome = process.env.USERPROFILE || process.env.HOME || process.cwd();
-  const skillsDir = path.join(userHome, 'AppData', 'Local', 'hermes', 'skills');
-  try {
-    if (!fs.existsSync(skillsDir)) {
-      fs.mkdirSync(skillsDir, { recursive: true });
-    }
-    const defaultSkills = [
-      { name: 'senior-coding-standards', content: '---\nname: senior-coding-standards\ndescription: Enforce clean architecture & strict types.\n---\n# Senior Coding Standards\n- Strict TypeScript types (no any)\n- Defensive try/catch error handling\n- Zero sloppy code / stubs' },
-      { name: 'systematic-debugging', content: '---\nname: systematic-debugging\ndescription: 4-phase root cause debugging\n---\n# Systematic Debugging\n1. Isolate reproduce path\n2. Inspect root cause\n3. Apply targeted fix\n4. Verify check' },
-      { name: 'subagent-orchestration', content: '---\nname: subagent-orchestration\ndescription: Multi-agent swarm execution\n---\n# Subagent Swarm\n- Parallel workers\n- Delegated tasks\n- Progress synchronization' },
-      { name: 'nextjs-app-router-mastery', content: '---\nname: nextjs-app-router-mastery\ndescription: Next.js App Router & SSR mastery\n---\n# Next.js App Router\n- RSC and Client boundaries\n- Server Actions validation' },
-      { name: 'security-audit', content: '---\nname: security-audit\ndescription: Security audit and secret leak prevention\n---\n# Security Audit\n- Input sanitization\n- Secret protection\n- AST gatekeeping' }
-    ];
-
-    for (const skill of defaultSkills) {
-      const skillPath = path.join(skillsDir, skill.name);
-      if (!fs.existsSync(skillPath)) {
-        fs.mkdirSync(skillPath, { recursive: true });
-        fs.writeFileSync(path.join(skillPath, 'SKILL.md'), skill.content, 'utf-8');
-      }
-    }
-  } catch (err) {
-    console.error('Failed pre-installing skills:', err);
-  }
-}
-ensurePreinstalledSkills();
 
 // Helper to load Hermes config if available
 function loadHermesConfig() {
@@ -82,11 +52,12 @@ function loadHermesConfig() {
 const hermesFallback = loadHermesConfig();
 
 // Load or default config
-let currentConfig: LLMConfig & { workspaceDir: string } = {
+let currentConfig: LLMConfig & { workspaceDir: string; recentWorkspaces: string[] } = {
   apiKey: hermesFallback?.apiKey || process.env.OPENAI_API_KEY || process.env.OPENROUTER_API_KEY || '',
   baseURL: hermesFallback?.baseURL || process.env.OPENAI_BASE_URL || 'https://openrouter.ai/api/v1',
   model: hermesFallback?.model || 'deepseek/deepseek-chat',
   workspaceDir: process.cwd(),
+  recentWorkspaces: [process.cwd()],
 };
 
 if (fs.existsSync(CONFIG_FILE)) {
@@ -98,33 +69,107 @@ if (fs.existsSync(CONFIG_FILE)) {
     } else {
       currentConfig.workspaceDir = path.resolve(currentConfig.workspaceDir);
     }
+    if (Array.isArray(saved.recentWorkspaces)) {
+      currentConfig.recentWorkspaces = saved.recentWorkspaces.filter((w: any) => typeof w === 'string' && fs.existsSync(w));
+    }
+    if (!currentConfig.recentWorkspaces.includes(currentConfig.workspaceDir)) {
+      currentConfig.recentWorkspaces.unshift(currentConfig.workspaceDir);
+    }
   } catch {}
 }
 
-function getPublicConfig(config: LLMConfig & { workspaceDir: string }) {
+function getPublicConfig(config: LLMConfig & { workspaceDir: string; recentWorkspaces: string[] }) {
   return {
     baseURL: config.baseURL,
     model: config.model,
     workspaceDir: config.workspaceDir,
+    recentWorkspaces: config.recentWorkspaces || [config.workspaceDir],
     hasKey: Boolean(config.apiKey),
-    apiKeyMasked: config.apiKey ? `${config.apiKey.slice(0, 6)}...${config.apiKey.slice(-4)}` : '',
+    apiKeyMasked: config.apiKey ? '••••••••' : '',
   };
 }
 
-const llmClient = new LLMClient({
-  apiKey: currentConfig.apiKey,
-  baseURL: currentConfig.baseURL,
-  model: currentConfig.model,
-});
+function pickFolderNative(): Promise<string | null> {
+  return new Promise((resolve) => {
+    const isWin = process.platform === 'win32';
+    const isMac = process.platform === 'darwin';
+    let cmd = '';
+    let args: string[] = [];
 
-let currentAgent = new Agent({
-  cwd: currentConfig.workspaceDir,
-  llm: llmClient,
-});
+    if (isWin) {
+      cmd = 'powershell';
+      args = [
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-Command',
+        "[System.Reflection.Assembly]::LoadWithPartialName('System.windows.forms') | Out-Null; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = 'Select Project Workspace'; $f.ShowNewFolderButton = $true; if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($f.SelectedPath) }"
+      ];
+    } else if (isMac) {
+      cmd = 'osascript';
+      args = ['-e', 'POSIX path of (choose folder with prompt "Select Project Workspace")'];
+    } else {
+      cmd = 'zenity';
+      args = ['--file-selection', '--directory', '--title=Select Project Workspace'];
+    }
+
+    try {
+      const child = spawn(cmd, args, { windowsHide: true });
+      let output = '';
+      child.stdout?.on('data', (chunk) => output += chunk.toString());
+      child.on('close', (code) => {
+        const trimmed = output.trim();
+        if (code === 0 && trimmed && fs.existsSync(trimmed) && fs.statSync(trimmed).isDirectory()) {
+          resolve(trimmed);
+        } else {
+          resolve(null);
+        }
+      });
+      child.on('error', () => resolve(null));
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+const sessions = new SessionStore(ALISA_SESSIONS_DIR);
+const activeWorkspaces = new Set<string>();
+const schedules = new ScheduleStore(path.join(RUNTIME_DIR, '.alisa-schedules.json'));
+const scheduler = setInterval(() => {
+  schedules.tick(async schedule => {
+    const workspace = schedule.workspace;
+    if (!fs.existsSync(workspace)) throw new Error('Scheduled workspace no longer exists');
+    activeWorkspaces.add(workspace);
+    const session = sessions.create(workspace);
+    const agent = new Agent({ cwd: workspace, mode: 'ask', maxIterations: 10, llm: new LLMClient({ ...currentConfig }), onEvent(event) {
+      if (event.type === 'message_added') { session.messages.push(event.message); sessions.save(session); }
+    }});
+    try {
+      await agent.runTask(schedule.prompt);
+      if (agent.getStatus() === 'error') throw new Error(`Scheduled task failed. Review chat ${session.id}`);
+      return session.id;
+    } finally { activeWorkspaces.delete(workspace); }
+  }, workspace => activeWorkspaces.has(workspace)).catch(err => console.error('Scheduler failed:', err.message));
+}, 15000);
+scheduler.unref();
+
+const trustedOrigins = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`, 'http://127.0.0.1:3050', 'http://localhost:3050', 'http://tauri.localhost', 'https://tauri.localhost', 'tauri://localhost']);
+
+function trustedHost(host?: string) {
+  try { return ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(`http://${host}`).hostname); } catch { return false; }
+}
 
 const server = http.createServer(async (req, res) => {
   // Enable CORS
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  const origin = req.headers.origin;
+  if ((origin && !trustedOrigins.has(origin)) || !trustedHost(req.headers.host)) {
+    res.writeHead(403); res.end('Untrusted origin'); return;
+  }
+  if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  if (req.method === 'POST' && req.headers['content-type'] && !req.headers['content-type'].startsWith('application/json')) {
+    res.writeHead(415); res.end('Use application/json'); return;
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
@@ -136,6 +181,47 @@ const server = http.createServer(async (req, res) => {
 
   const url = new URL(req.url || '/', `http://${req.headers.host}`);
 
+  if (url.pathname === '/api/git' && req.method === 'GET') {
+    try { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(await gitOverview(currentConfig.workspaceDir))); }
+    catch { res.writeHead(400); res.end(JSON.stringify({ error: 'Cannot read Git status. Open an initialized Git repository with at least one commit.' })); }
+    return;
+  }
+  if (url.pathname === '/api/pull-requests' && req.method === 'GET') {
+    try { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ pullRequests: await listPullRequests(currentConfig.workspaceDir) })); }
+    catch (err: any) { res.writeHead(400); res.end(JSON.stringify({ error: err.message })); }
+    return;
+  }
+  if (url.pathname === '/api/schedules' && req.method === 'GET') {
+    res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ schedules: schedules.list(currentConfig.workspaceDir) })); return;
+  }
+  if (url.pathname === '/api/schedules' && req.method === 'POST') {
+    try {
+      let body = '';
+      for await (const chunk of req) { body += chunk; if (body.length > 64000) throw new Error('Schedule request is too large'); }
+      const data = JSON.parse(body);
+      if (data.action) {
+        const change = z.object({ id: z.string().uuid(), action: z.enum(['pause', 'resume', 'delete']) }).parse(data);
+        schedules.update(currentConfig.workspaceDir, change.id, change.action);
+      } else {
+        const input = z.object({ name: z.string().trim().min(1).max(100), prompt: z.string().trim().min(1).max(20000), intervalMinutes: z.number().int().min(15).max(43200) }).parse(data);
+        schedules.create({ ...input, workspace: currentConfig.workspaceDir });
+      }
+      res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ schedules: schedules.list(currentConfig.workspaceDir) }));
+    } catch (err: any) { res.writeHead(400); res.end(JSON.stringify({ error: err.message })); }
+    return;
+  }
+  if (url.pathname === '/api/provider/test' && req.method === 'POST') {
+    try {
+      const config = { ...currentConfig };
+      const response = await fetch(`${config.baseURL.replace(/\/+$/, '')}/models`, { headers: { Authorization: `Bearer ${config.apiKey}` }, signal: AbortSignal.timeout(15000), redirect: 'error' });
+      if (!response.ok) throw new Error(`Provider returned HTTP ${response.status}. Check the saved URL and API key.`);
+      const data = await response.json() as { data?: Array<{ id: string }> };
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ models: (data.data || []).filter(m => typeof m.id === 'string').map(m => m.id), message: 'Connected. Model discovery succeeded; tool calling depends on the selected model.' }));
+    } catch (err: any) { res.writeHead(400); res.end(JSON.stringify({ error: err.message })); }
+    return;
+  }
+
   if (url.pathname === '/api/config') {
     if (req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -146,6 +232,7 @@ const server = http.createServer(async (req, res) => {
       req.on('end', () => {
         try {
           const data = JSON.parse(body);
+          if (activeWorkspaces.size) throw new Error('Stop running tasks before changing settings or workspace');
           const nextConfig = { ...currentConfig };
           if (data.apiKey !== undefined) {
             if (typeof data.apiKey !== 'string') throw new Error('API key must be text');
@@ -160,6 +247,8 @@ const server = http.createServer(async (req, res) => {
             if (typeof data.baseURL !== 'string' || !data.baseURL.trim()) {
               throw new Error('Base URL must be a non-empty URL');
             }
+            const parsedURL = new URL(data.baseURL.trim());
+            if (!['http:', 'https:'].includes(parsedURL.protocol)) throw new Error('Use an HTTP or HTTPS API URL');
             nextConfig.baseURL = data.baseURL.trim().replace(/\/+$/, '');
           }
           if (data.model !== undefined) {
@@ -177,17 +266,12 @@ const server = http.createServer(async (req, res) => {
               throw new Error(`Workspace directory does not exist: ${data.workspaceDir}`);
             }
             nextConfig.workspaceDir = requestedWorkspace;
+            const existingRecent = (nextConfig.recentWorkspaces || []).filter(w => w !== requestedWorkspace);
+            nextConfig.recentWorkspaces = [requestedWorkspace, ...existingRecent].slice(0, 20);
           }
 
           fs.writeFileSync(CONFIG_FILE, JSON.stringify(nextConfig, null, 2), 'utf-8');
           currentConfig = nextConfig;
-          llmClient.updateConfig({
-            apiKey: currentConfig.apiKey,
-            baseURL: currentConfig.baseURL,
-            model: currentConfig.model,
-          });
-          currentAgent.setWorkspace(currentConfig.workspaceDir);
-
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ success: true, config: getPublicConfig(currentConfig) }));
         } catch (err: any) {
@@ -196,6 +280,97 @@ const server = http.createServer(async (req, res) => {
         }
       });
     }
+    return;
+  }
+
+  if (url.pathname === '/api/workspace/pick-folder' && req.method === 'POST') {
+    try {
+      const selected = await pickFolderNative();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ path: selected }));
+    } catch (err: any) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message || 'Unable to pick folder' }));
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/workspace/remove-recent' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        if (typeof data.path === 'string') {
+          currentConfig.recentWorkspaces = (currentConfig.recentWorkspaces || []).filter(w => w !== data.path);
+          fs.writeFileSync(CONFIG_FILE, JSON.stringify(currentConfig, null, 2), 'utf-8');
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, recentWorkspaces: currentConfig.recentWorkspaces }));
+      } catch (err: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  if (url.pathname === '/api/files/create' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const relPath = (data.path || '').trim();
+        if (!relPath) throw new Error('Path is required');
+        const full = path.isAbsolute(relPath) ? path.resolve(relPath) : path.resolve(currentConfig.workspaceDir, relPath);
+        if (!isPathInsideWorkspace(full, currentConfig.workspaceDir)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Cannot create files outside active workspace' }));
+          return;
+        }
+        if (data.isDirectory) {
+          fs.mkdirSync(full, { recursive: true });
+        } else {
+          const dir = path.dirname(full);
+          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+          if (!fs.existsSync(full)) fs.writeFileSync(full, '', 'utf-8');
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, path: relPath }));
+      } catch (err: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  if (url.pathname === '/api/files/reveal' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const data = JSON.parse(body);
+        const rel = typeof data.path === 'string' ? data.path.trim() : '';
+        const target = rel ? path.resolve(currentConfig.workspaceDir, rel) : currentConfig.workspaceDir;
+        if (fs.existsSync(target)) {
+          if (process.platform === 'win32') {
+            const isDir = fs.statSync(target).isDirectory();
+            spawn('explorer.exe', [isDir ? target : `/select,${target}`], { detached: true });
+          } else if (process.platform === 'darwin') {
+            spawn('open', ['-R', target], { detached: true });
+          } else {
+            spawn('xdg-open', [fs.statSync(target).isDirectory() ? target : path.dirname(target)], { detached: true });
+          }
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+      } catch (err: any) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
     return;
   }
 
@@ -208,81 +383,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/api/skills' && req.method === 'GET') {
-    const hermesSkillsDir = path.join(process.env.LOCALAPPDATA || process.cwd(), 'hermes', 'skills');
-    const localSkillsDir = path.join(currentConfig.workspaceDir, '.hermes', 'skills');
-    
-    let skillsList: Array<{ name: string; category: string; description: string; source: string; path: string }> = [
-      {
-        name: 'openclaude-code-standards',
-        category: 'software-development',
-        description: 'Enforce OpenClaude & Senior Engineering standards (Clean architecture, zero-sloppy code, type-safety).',
-        source: 'built-in',
-        path: 'built-in/openclaude-code-standards'
-      },
-      {
-        name: 'subagent-orchestration',
-        category: 'autonomous-ai-agents',
-        description: 'Multi-agent swarm execution: parallel workers, task delegation, and progress tracking.',
-        source: 'built-in',
-        path: 'built-in/subagent-orchestration'
-      },
-      {
-        name: 'systematic-debugging',
-        category: 'software-development',
-        description: '4-phase root cause debugging: isolate errors before writing fixes.',
-        source: 'built-in',
-        path: 'built-in/systematic-debugging'
-      },
-      {
-        name: 'web-vulnerability-scanner',
-        category: 'security',
-        description: 'Audit web applications for OWASP Top 10 vulnerabilities, input sanitization, and secrets.',
-        source: 'built-in',
-        path: 'built-in/web-vulnerability-scanner'
-      },
-      {
-        name: 'test-driven-development',
-        category: 'software-development',
-        description: 'Enforce RED-GREEN-REFACTOR cycle with unit and integration tests.',
-        source: 'built-in',
-        path: 'built-in/test-driven-development'
-      }
-    ];
-
-    const scanSkillDir = (dirPath: string, sourceName: string) => {
-      if (!fs.existsSync(dirPath)) return;
-      try {
-        const files = fs.readdirSync(dirPath, { withFileTypes: true });
-        for (const file of files) {
-          if (file.isDirectory()) {
-            const skillMd = path.join(dirPath, file.name, 'SKILL.md');
-            if (fs.existsSync(skillMd)) {
-              const content = fs.readFileSync(skillMd, 'utf-8');
-              const descMatch = content.match(/description:\s*["']?([^"\n\r]+)["']?/i);
-              skillsList.push({
-                name: file.name,
-                category: 'custom',
-                description: descMatch ? descMatch[1] : 'Hermes System Skill',
-                source: sourceName,
-                path: skillMd
-              });
-            }
-          }
-        }
-      } catch (err) {
-        console.error('Failed scanning skill dir:', err);
-      }
-    };
-
-    scanSkillDir(hermesSkillsDir, 'hermes-system');
-    scanSkillDir(localSkillsDir, 'workspace-local');
-
-    const uniqueSkills = Array.from(
-      new Map(skillsList.map((skill) => [skill.name, skill])).values(),
-    );
-
+    const skills = discoverSkills(currentConfig.workspaceDir).map(({ content, ...entry }) => entry);
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ skills: uniqueSkills }));
+    res.end(JSON.stringify({ skills }));
     return;
   }
 
@@ -338,6 +441,9 @@ const server = http.createServer(async (req, res) => {
           return;
         }
 
+        if (typeof data.originalContent === 'string' && fs.readFileSync(fullPath, 'utf8') !== data.originalContent) {
+          res.writeHead(409); res.end(JSON.stringify({ error: 'File changed on disk. Reopen it and review the changes before saving.' })); return;
+        }
         await writeFileTool.execute(
           { path: requestedPath, content: data.content },
           {
@@ -410,53 +516,35 @@ const server = http.createServer(async (req, res) => {
 
   // Auto-Update Engine Endpoint
   if (url.pathname === '/api/update/check' && req.method === 'GET') {
-    ensurePreinstalledSkills();
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
-      upToDate: true,
+      upToDate: null,
       version: '1.0.0',
       preinstalledSkillsCount: 5,
       lastChecked: new Date().toISOString(),
-      status: 'All core pre-installed skills and Alisa Studio components are fully synchronized.'
+      status: 'Automatic updates are not configured for this Tauri build. Check GitHub Releases manually.'
     }));
     return;
   }
   if (url.pathname === '/api/sessions' && req.method === 'GET') {
-    const wsDir = url.searchParams.get('workspace') || currentConfig.workspaceDir;
-    const sessionFile = getProjectSessionFile(wsDir);
-    let messages = [];
-    if (fs.existsSync(sessionFile)) {
-      try {
-        messages = JSON.parse(fs.readFileSync(sessionFile, 'utf-8'));
-      } catch {}
-    }
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ workspaceDir: wsDir, messages }));
+    try {
+      const workspace = url.searchParams.get('workspace') || currentConfig.workspaceDir;
+      const session = sessions.get(workspace, url.searchParams.get('id') || undefined);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ workspaceDir: workspace, sessionId: session.id, messages: session.messages, sessions: sessions.list(workspace).map(({ messages, ...summary }) => summary) }));
+    } catch (err: any) { res.writeHead(400); res.end(JSON.stringify({ error: err.message })); }
     return;
   }
-
   if (url.pathname === '/api/sessions' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => body += chunk);
-    req.on('end', () => {
-      try {
-        const data = JSON.parse(body);
-        const wsDir = data.workspaceDir || currentConfig.workspaceDir;
-        const messages = data.messages || [];
-        const sessionFile = getProjectSessionFile(wsDir);
-        fs.writeFileSync(sessionFile, JSON.stringify(messages, null, 2), 'utf-8');
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true }));
-      } catch (err: any) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: err.message }));
-      }
-    });
+    if (activeWorkspaces.has(currentConfig.workspaceDir)) { res.writeHead(409); res.end(JSON.stringify({ error: 'Stop the active task before creating a chat' })); return; }
+    const session = sessions.create(currentConfig.workspaceDir);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ sessionId: session.id }));
     return;
   }
   if (url.pathname === '/api/rollback' && req.method === 'POST') {
     try {
-      const { getTxManager } = require('../tools/file-ops.ts');
+      if (activeWorkspaces.size) throw new Error('Stop active tasks before rollback');
       const tx = getTxManager(currentConfig.workspaceDir);
       const rollbackResult = await tx.rollbackLatest();
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -468,13 +556,15 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname.startsWith('/api/')) { res.writeHead(404); res.end(JSON.stringify({ error: 'API route not found' })); return; }
+
   // Serve static UI assets from dist folder
   let distDir = path.join(__dirname, '../dist');
   if (!fs.existsSync(distDir)) {
     distDir = path.join(process.cwd(), 'dist');
   }
-  if (!fs.existsSync(distDir) && process.resourcesPath) {
-    distDir = path.join(process.resourcesPath, 'dist');
+  if (!fs.existsSync(distDir) && process.env.ALISA_RESOURCES_DIR) {
+    distDir = path.join(process.env.ALISA_RESOURCES_DIR, 'dist');
   }
 
   let reqPath = url.pathname === '/' ? '/index.html' : url.pathname;
@@ -514,7 +604,6 @@ function getFileTree(dir: string, base: string, depth = 0): any[] {
     'node_modules',
     '.git',
     'dist',
-    'dist-electron',
     'release',
     'build',
     '.next',
@@ -554,85 +643,82 @@ function getFileTree(dir: string, base: string, depth = 0): any[] {
 }
 
 function isPathInsideWorkspace(filePath: string, workspaceDir: string): boolean {
-  const workspace = path.resolve(workspaceDir);
-  const target = path.resolve(filePath);
-  return target === workspace || target.startsWith(`${workspace}${path.sep}`);
+  try { resolveWorkspacePath(workspaceDir, filePath); return true; } catch { return false; }
 }
 
 // WebSocket Server
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 1024 * 1024, verifyClient: ({ origin, req }: { origin: string; req: http.IncomingMessage }) => (!origin || trustedOrigins.has(origin)) && trustedHost(req.headers.host) });
 
-wss.on('connection', (ws: WebSocket) => {
-  let sessionWorkspace = currentConfig.workspaceDir;
-  let sessionFile = getProjectSessionFile(sessionWorkspace);
-  let sessionHistory: Message[] = [];
-  if (fs.existsSync(sessionFile)) {
-    try {
-      sessionHistory = JSON.parse(fs.readFileSync(sessionFile, 'utf-8'));
-    } catch {}
+wss.on('error', (err: any) => {
+  if (err?.code === 'EADDRINUSE' || err?.message?.includes('in use')) {
+    // Port in use will be handled by server.on('error')
+    return;
   }
-
-  const broadcast = (event: AgentEvent) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(event));
-    }
-  };
-
-  currentAgent = new Agent({
-    cwd: currentConfig.workspaceDir,
-    llm: llmClient,
-    onEvent: broadcast,
-  });
-
-  ws.on('message', async (data: string) => {
-    try {
-      if (sessionWorkspace !== currentConfig.workspaceDir) {
-        sessionWorkspace = currentConfig.workspaceDir;
-        sessionFile = getProjectSessionFile(sessionWorkspace);
-        sessionHistory = [];
-        if (fs.existsSync(sessionFile)) {
-          try {
-            sessionHistory = JSON.parse(fs.readFileSync(sessionFile, 'utf-8'));
-          } catch {}
-        }
-      }
-
-      const msg = JSON.parse(data.toString());
-      if (msg.type === 'start_task') {
-        const prompt = msg.prompt;
-        if (!prompt) return;
-
-        broadcast({ type: 'status_change', status: 'thinking', detail: 'Planning task' });
-        const requestedSkills = Array.isArray(msg.skills)
-          ? msg.skills.filter((skill: unknown): skill is string => typeof skill === 'string')
-          : [];
-        const updatedHistory = await currentAgent.runTask(prompt, sessionHistory, requestedSkills);
-        sessionHistory = updatedHistory;
-        fs.writeFileSync(sessionFile, JSON.stringify(sessionHistory, null, 2), 'utf-8');
-      } else if (msg.type === 'abort_task') {
-        currentAgent.abort();
-        broadcast({ type: 'status_change', status: 'idle', detail: 'Cancelled' });
-      } else if (msg.type === 'clear_history') {
-        sessionHistory = [];
-        if (fs.existsSync(sessionFile)) {
-          fs.unlinkSync(sessionFile);
-        }
-        broadcast({ type: 'status_change', status: 'idle', detail: 'History cleared' });
-      }
-    } catch (err: any) {
-      broadcast({ type: 'error', message: err.message || 'WebSocket error' });
-    }
-  });
-
-  // Initial welcome event
-  broadcast({
-    type: 'status_change',
-    status: 'idle',
-    detail: 'Backend connected',
-  });
+  console.error('WebSocket server error:', err);
 });
 
-server.listen(PORT, () => {
+wss.on('connection', (ws: WebSocket) => {
+  let agent: Agent | undefined;
+  let running = false;
+  const approvals = new Map<string, (approved: boolean) => void>();
+  const broadcast = (event: AgentEvent | { type: 'session_saved'; sessionId: string }) => {
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(event));
+  };
+  ws.on('message', async (data) => {
+    try {
+      const msg = JSON.parse(data.toString());
+      if (msg.type === 'approval_response') { approvals.get(msg.resolveId)?.(msg.approved === true); return; }
+      if (msg.type === 'abort_task') { agent?.abort(); return; }
+      if (msg.type !== 'start_task') return;
+      if (running || activeWorkspaces.has(currentConfig.workspaceDir)) throw new Error('A task is already running in this workspace');
+      if (typeof msg.prompt !== 'string' || !msg.prompt.trim()) throw new Error('Prompt is required');
+      const workspace = currentConfig.workspaceDir;
+      const session = sessions.get(workspace, msg.sessionId);
+      running = true;
+      activeWorkspaces.add(workspace);
+      agent = new Agent({ cwd: workspace, mode: msg.mode === 'ask' ? 'ask' : 'code', requestApproval: (action, details, signal) => new Promise(resolve => {
+        const resolveId = crypto.randomUUID();
+        const finish = (approved: boolean) => { approvals.delete(resolveId); signal.removeEventListener('abort', cancel); clearTimeout(timer); resolve(approved); };
+        const cancel = () => finish(false);
+        const timer = setTimeout(cancel, 5 * 60 * 1000);
+        approvals.set(resolveId, finish);
+        signal.addEventListener('abort', cancel, { once: true });
+        if (signal.aborted) { cancel(); return; }
+        broadcast({ type: 'approval_requested', action, details, resolveId });
+      }), llm: new LLMClient({ ...currentConfig }), onEvent: (event) => {
+        if (event.type === 'message_added') {
+          session.messages.push(event.message);
+          sessions.save(session);
+        }
+        broadcast(event);
+      }});
+      try {
+        await agent.runTask(msg.prompt.trim(), [...session.messages], Array.isArray(msg.skills) ? msg.skills.filter((s: unknown) => typeof s === 'string') : []);
+      } finally {
+        running = false;
+        activeWorkspaces.delete(workspace);
+        broadcast({ type: 'session_saved', sessionId: session.id });
+      }
+    } catch (err: any) {
+      broadcast({ type: 'error', message: err.message || 'Task failed' });
+      if (running && agent) broadcast({ type: 'status_change', status: agent.getStatus(), detail: err.message });
+    }
+  });
+  ws.on('close', () => agent?.abort());
+  broadcast({ type: 'status_change', status: 'idle', detail: 'Backend connected' });
+});
+
+server.on('error', (err: any) => {
+  if (err?.code === 'EADDRINUSE' || err?.message?.includes('in use') || err?.message?.includes('EADDRINUSE')) {
+    console.warn(`⚠️ Port ${PORT} is already in use. Project Alisa Studio backend may already be running.`);
+    process.exit(1);
+  } else {
+    console.error('Server error:', err);
+    process.exit(1);
+  }
+});
+
+server.listen(PORT, '127.0.0.1', () => {
   console.log(`🍓 Project Alisa Studio backend running on http://localhost:${PORT}`);
   console.log(`📂 Active Workspace: ${currentConfig.workspaceDir}`);
 });

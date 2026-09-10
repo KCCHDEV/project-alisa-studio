@@ -85,7 +85,7 @@ export class LLMClient {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
-      signal,
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(180000)]) : AbortSignal.timeout(180000),
     });
 
     if (!response.ok) {
@@ -107,66 +107,55 @@ export class LLMClient {
     let fullContent = '';
     let fullThought = '';
     let toolCallsMap = new Map<number, { id: string; name: string; args: string }>();
-    let finishReason = 'stop';
+    let finishReason = '';
+    let completed = false;
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith('data:')) continue;
-        if (trimmed === 'data: [DONE]') break;
-
-        try {
-          const json = JSON.parse(trimmed.slice(5).trim());
-          const choice = json.choices?.[0];
-          if (!choice) continue;
-
-          if (choice.finish_reason) {
-            finishReason = choice.finish_reason;
-          }
-
-          const delta = choice.delta;
-          if (!delta) continue;
-
-          // Thinking / reasoning delta (DeepSeek-R1, Qwen etc.)
-          if (delta.reasoning_content || delta.thought) {
-            const thoughtChunk = delta.reasoning_content || delta.thought;
-            fullThought += thoughtChunk;
-            callbacks.onThought?.(thoughtChunk);
-          }
-
-          // Content delta
-          if (delta.content) {
-            fullContent += delta.content;
-            callbacks.onToken?.(delta.content);
-          }
-
-          // Tool calls delta
-          if (delta.tool_calls) {
-            for (const tc of delta.tool_calls) {
-              const index = tc.index ?? 0;
-              let existing = toolCallsMap.get(index);
-              if (!existing) {
-                existing = {
-                  id: tc.id || `call_${Date.now()}_${index}`,
-                  name: tc.function?.name || '',
-                  args: '',
-                };
-                toolCallsMap.set(index, existing);
-              }
-              if (tc.id) existing.id = tc.id;
-              if (tc.function?.name) existing.name += tc.function.name;
-              if (tc.function?.arguments) existing.args += tc.function.arguments;
-            }
-          }
-        } catch {}
+    const consume = (line: string) => {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data:')) return;
+      const payload = trimmed.slice(5).trim();
+      if (payload === '[DONE]') { completed = true; return; }
+      const json = JSON.parse(payload);
+      if (json.error) throw new Error(json.error.message || 'Provider stream failed');
+      const choice = json.choices?.[0];
+      if (!choice) return;
+      if (choice.finish_reason) finishReason = choice.finish_reason;
+      const delta = choice.delta;
+      if (!delta) return;
+      const thought = delta.reasoning_content || delta.thought;
+      if (thought) { fullThought += thought; callbacks.onThought?.(thought); }
+      if (delta.content) { fullContent += delta.content; callbacks.onToken?.(delta.content); }
+      for (const tc of delta.tool_calls || []) {
+        const index = tc.index ?? 0;
+        let existing = toolCallsMap.get(index);
+        if (!existing) {
+          existing = { id: '', name: '', args: '' };
+          toolCallsMap.set(index, existing);
+        }
+        if (tc.id) existing.id = tc.id;
+        if (tc.function?.name) existing.name += tc.function.name;
+        if (tc.function?.arguments) existing.args += tc.function.arguments;
       }
+    };
+    try {
+      while (!completed) {
+        const { done, value } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) { consume(line); if (completed) break; }
+        if (done) { if (buffer.trim() && !completed) consume(buffer); break; }
+      }
+      if (!completed && !finishReason) throw new Error('Provider stream ended before completion. Please retry.');
+      if (finishReason === 'length' || finishReason === 'content_filter') {
+        throw new Error(`Provider stopped the response: ${finishReason}`);
+      }
+      for (const tc of toolCallsMap.values()) {
+        if (!tc.id || !tc.name) throw new Error('Provider returned an incomplete tool call');
+      }
+    } finally {
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
     }
 
     const finalToolCalls: ToolCall[] = Array.from(toolCallsMap.values()).map(tc => ({

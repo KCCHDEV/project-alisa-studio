@@ -1,3 +1,7 @@
+> **Current runtime: Tauri + Bun.** The repository is migrating from Electron; the older overview below describes the previous release. For current commands, working features, isolation limits, and local plugins, see [Restored workflow](docs/RESTORATION.md).
+>
+> Start: `bun install --frozen-lockfile` → `bun run tauri:dev`. Web: `bun run dev:all` at `http://127.0.0.1:3050`. Verify: `bun test` and `bun run build`. Package: `bun run dist`.
+
 <div align="center">
 
 <img src="public/avatar.png" width="180" alt="Project Alisa Studio mascot" />

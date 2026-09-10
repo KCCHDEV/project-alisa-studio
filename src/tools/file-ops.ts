@@ -1,3 +1,4 @@
+import { resolveWorkspacePath } from '../core/workspace';
 import { z } from 'zod';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -32,7 +33,7 @@ export const readFileTool: ToolDefinition<z.input<typeof ReadFileInputSchema>, {
   description: 'Read a text file with line numbers and optional pagination.',
   parameters: ReadFileInputSchema,
   execute: async (args, context) => {
-    const fullPath = path.isAbsolute(args.path) ? args.path : path.join(context.cwd, args.path);
+    const fullPath = resolveWorkspacePath(context.cwd, args.path);
     if (!fs.existsSync(fullPath)) {
       throw new Error(`File not found: ${args.path}`);
     }
@@ -66,7 +67,7 @@ export const writeFileTool: ToolDefinition<z.infer<typeof WriteFileInputSchema>,
   description: 'Write complete content to a file, automatically creating parent directories if needed.',
   parameters: WriteFileInputSchema,
   execute: async (args, context) => {
-    const fullPath = path.isAbsolute(args.path) ? args.path : path.join(context.cwd, args.path);
+    const fullPath = resolveWorkspacePath(context.cwd, args.path);
 
     // 1. Audit secret leakage
     const audit = gatekeeper.auditFileWrite(args.path, args.content);
@@ -74,15 +75,7 @@ export const writeFileTool: ToolDefinition<z.infer<typeof WriteFileInputSchema>,
       throw new Error(audit.reason || '🛡️ File write blocked by Security Gatekeeper');
     }
 
-    // 2. Snapshot current state for 1-click rollback
-    const tx = getTxManager(context.cwd);
-    await tx.createSnapshot(fullPath);
-
-    const dir = path.dirname(fullPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.writeFileSync(fullPath, args.content, 'utf-8');
+    await getTxManager(context.cwd).writeFile(fullPath, args.content);
     return {
       success: true,
       bytesWritten: Buffer.byteLength(args.content, 'utf-8'),
@@ -104,7 +97,7 @@ export const patchFileTool: ToolDefinition<z.input<typeof PatchFileInputSchema>,
   description: 'Perform targeted find-and-replace edits on a file without rewriting the whole content.',
   parameters: PatchFileInputSchema,
   execute: async (args, context) => {
-    const fullPath = path.isAbsolute(args.path) ? args.path : path.join(context.cwd, args.path);
+    const fullPath = resolveWorkspacePath(context.cwd, args.path);
     if (!fs.existsSync(fullPath)) {
       throw new Error(`File not found: ${args.path}`);
     }
@@ -115,63 +108,18 @@ export const patchFileTool: ToolDefinition<z.input<typeof PatchFileInputSchema>,
       throw new Error(audit.reason || '🛡️ Patch blocked by Security Gatekeeper');
     }
 
-    // 2. Snapshot state for 1-click rollback
-    const tx = getTxManager(context.cwd);
-    await tx.createSnapshot(fullPath);
-
     const original = fs.readFileSync(fullPath, 'utf-8');
-
-    // Normalize line endings for reliable matching
-    const normalize = (s: string) => s.replace(/\r\n/g, '\n');
-    const normOrig = normalize(original);
-    const normOld = normalize(args.old_string);
-    const normNew = normalize(args.new_string);
-
-    if (!normOrig.includes(normOld)) {
-      // Try trimmed lines fuzzy match
-      const oldLines = normOld.trim().split('\n').map(l => l.trim());
-      const origLines = normOrig.split('\n');
-      let matchIdx = -1;
-
-      for (let i = 0; i <= origLines.length - oldLines.length; i++) {
-        let allMatch = true;
-        for (let j = 0; j < oldLines.length; j++) {
-          if (origLines[i + j].trim() !== oldLines[j]) {
-            allMatch = false;
-            break;
-          }
-        }
-        if (allMatch) {
-          matchIdx = i;
-          break;
-        }
-      }
-
-      if (matchIdx === -1) {
-        throw new Error(`Could not find old_string in ${args.path}. Please verify the exact lines and retry.`);
-      }
-
-      origLines.splice(matchIdx, oldLines.length, normNew);
-      fs.writeFileSync(fullPath, origLines.join('\n'), 'utf-8');
-      return {
-        success: true,
-        diffSummary: `Fuzzy matched and replaced at line ${matchIdx + 1}`,
-      };
-    }
-
-    let updated: string;
-    if (args.replace_all) {
-      updated = normOrig.replaceAll(normOld, normNew);
-    } else {
-      const idx = normOrig.indexOf(normOld);
-      updated = normOrig.slice(0, idx) + normNew + normOrig.slice(idx + normOld.length);
-    }
-
-    fs.writeFileSync(fullPath, updated, 'utf-8');
-    return {
-      success: true,
-      diffSummary: `Successfully replaced target block in ${args.path}`,
-    };
+    const normalize = (text: string) => text.replace(/\r\n/g, '\n');
+    const source = normalize(original);
+    const old = normalize(args.old_string);
+    if (!old) throw new Error('old_string must not be empty');
+    if (!source.includes(old)) throw new Error('Exact text not found. Read the file again before patching.');
+    if (!args.replace_all && source.indexOf(old) !== source.lastIndexOf(old)) throw new Error('Multiple matches. Provide more context or set replace_all.');
+    const replacement = normalize(args.new_string);
+    let updated = args.replace_all ? source.replaceAll(old, () => replacement) : source.replace(old, () => replacement);
+    if (original.includes('\r\n')) updated = updated.replace(/\n/g, '\r\n');
+    await getTxManager(context.cwd).writeFile(fullPath, updated);
+    return { success: true, diffSummary: `Replaced target block in ${args.path}` };
   }
 };
 
@@ -187,7 +135,7 @@ export const listDirTool: ToolDefinition<z.input<typeof ListDirInputSchema>, { e
   description: 'List files and subdirectories in a directory with file sizes and directory flags.',
   parameters: ListDirInputSchema,
   execute: async (args, context) => {
-    const fullPath = path.isAbsolute(args.path || '.') ? (args.path || '.') : path.join(context.cwd, args.path || '.');
+    const fullPath = resolveWorkspacePath(context.cwd, args.path || '.');
     if (!fs.existsSync(fullPath)) {
       throw new Error(`Directory not found: ${args.path}`);
     }

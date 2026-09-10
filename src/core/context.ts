@@ -67,13 +67,21 @@ Always verify your changes and provide clear summaries of what was accomplished!
       timestamp: Date.now(),
     };
 
-    // Keep system message + recent messages
-    // If history is too large, slide the window preserving the first and most recent turns
-    if (history.length > 50) {
-      const recent = history.slice(-40);
-      return [systemMsg, ...recent];
+    const repaired: Message[] = [];
+    for (let i = 0; i < history.length; i++) {
+      const message = history[i];
+      if (message.role === 'tool') continue;
+      repaired.push(message);
+      if (!message.tool_calls?.length) continue;
+      const results: Message[] = [];
+      while (history[i + 1]?.role === 'tool') results.push(history[++i]);
+      for (const call of message.tool_calls) {
+        repaired.push(results.find(result => result.tool_call_id === call.id) || {
+          id: `interrupted_${call.id}`, role: 'tool', tool_call_id: call.id,
+          content: 'This tool was interrupted. Inspect the workspace before retrying; its side effects are unknown.', timestamp: Date.now(),
+        });
+      }
     }
-
-    return [systemMsg, ...history];
+    return [systemMsg, ...repaired];
   }
 }

@@ -1,20 +1,23 @@
+import { discoverSkills } from './skills';
 import { ToolRegistry } from '../tools/registry.ts';
 import { LLMClient } from '../llm/client.ts';
 import { ContextManager, type ActiveSkill } from './context.ts';
 import { ContextCompactor } from './compactor.ts';
-import type { Message, AgentEvent, AgentStatus, ToolCall, SessionState } from './types.ts';
-import * as fs from 'fs';
-import * as path from 'path';
+import type { Message, AgentEvent, AgentStatus, ToolCall } from './types.ts';
 
 export interface AgentOptions {
   cwd: string;
   llm: LLMClient;
   toolRegistry?: ToolRegistry;
   maxIterations?: number;
+  mode?: 'ask' | 'code';
+  requestApproval?: (action: string, details: Record<string, unknown>, signal: AbortSignal) => Promise<boolean>;
   onEvent?: (event: AgentEvent) => void;
 }
 
 export class Agent {
+  private mode: 'ask' | 'code';
+  private requestApproval?: AgentOptions['requestApproval'];
   private cwd: string;
   private llm: LLMClient;
   private tools: ToolRegistry;
@@ -24,9 +27,12 @@ export class Agent {
   private onEvent?: (event: AgentEvent) => void;
   private isAborted = false;
   private currentAbortController: AbortController | null = null;
+  private running = false;
   private status: AgentStatus = 'idle';
 
   constructor(options: AgentOptions) {
+    this.mode = options.mode || 'code';
+    this.requestApproval = options.requestApproval;
     this.cwd = options.cwd;
     this.llm = options.llm;
     this.tools = options.toolRegistry || new ToolRegistry();
@@ -46,36 +52,13 @@ export class Agent {
   }
 
   setWorkspace(cwd: string) {
+    if (this.running) throw new Error("Stop the active task before changing workspace");
     this.cwd = cwd;
   }
 
   private loadActiveSkills(skillNames: string[]): ActiveSkill[] {
-    const names = Array.from(new Set(skillNames.filter((name): name is string => typeof name === 'string'))).slice(0, 20);
-    const userHome = process.env.USERPROFILE || process.env.HOME || process.cwd();
-    const roots = [
-      path.join(userHome, 'AppData', 'Local', 'hermes', 'skills'),
-      path.join(this.cwd, '.hermes', 'skills'),
-    ];
-    const builtInGuidance: Record<string, string> = {
-      'openclaude-code-standards': 'Prefer small, type-safe changes. Inspect before editing, handle errors explicitly, and verify the result.',
-      'subagent-orchestration': 'Break independent work into clear subtasks and report progress and verification points.',
-      'systematic-debugging': 'Reproduce the issue, trace the first bad value to its source, make one targeted fix, then verify it.',
-      'web-vulnerability-scanner': 'Check input validation, authorization, secret exposure, and unsafe browser or server boundaries.',
-      'test-driven-development': 'Define a focused failing behavior first, implement the smallest fix, and run the relevant test.',
-    };
-
-    return names.map((name) => {
-      const safeName = path.basename(name);
-      for (const root of roots) {
-        const candidate = path.join(root, safeName, 'SKILL.md');
-        try {
-          if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-            return { name: safeName, content: fs.readFileSync(candidate, 'utf-8') };
-          }
-        } catch {}
-      }
-      return { name: safeName, content: builtInGuidance[safeName] };
-    });
+    const selected = new Set(skillNames.slice(0, 20));
+    return discoverSkills(this.cwd).filter(skill => selected.has(skill.name));
   }
 
   emit(event: AgentEvent) {
@@ -85,13 +68,15 @@ export class Agent {
   abort() {
     this.isAborted = true;
     this.currentAbortController?.abort();
-    this.setStatus('idle', 'Cancelled by user');
+    // Stay busy until the stream and active tool have stopped.
   }
 
   /**
    * Run a complete ReAct task loop
    */
   async runTask(userPrompt: string, history: Message[] = [], skillNames: string[] = []): Promise<Message[]> {
+    if (this.running) throw new Error("A task is already running");
+    this.running = true;
     this.isAborted = false;
     this.currentAbortController = new AbortController();
 
@@ -106,7 +91,7 @@ export class Agent {
     this.emit({ type: 'message_added', message: userMessage });
 
     let iteration = 0;
-
+    try {
     while (iteration < this.maxIterations) {
       if (this.isAborted) break;
       iteration++;
@@ -125,10 +110,11 @@ export class Agent {
 
       const preparedMessages = this.contextManager.prepareMessages(
         compResult.compacted,
-        undefined,
+        `Directory: ${this.cwd}\nPlatform: ${process.platform}. File tools are workspace-scoped. Terminal runs with the OS user permissions.`,
         this.loadActiveSkills(skillNames),
       );
-      const openAITools = this.tools.toOpenAITools();
+      const readOnlyTools = new Set(['read_file', 'list_directory', 'search_files', 'manage_skill']);
+      const openAITools = this.tools.toOpenAITools().filter(t => this.mode !== 'ask' || readOnlyTools.has(t.function.name));
 
       let currentResponseContent = '';
       let currentThought = '';
@@ -197,8 +183,6 @@ export class Agent {
       this.setStatus('acting', `Executing ${toolCalls.length} tool(s)`);
 
       for (const tc of toolCalls) {
-        if (this.isAborted) break;
-
         const toolName = tc.function.name;
         let parsedArgs: Record<string, any> = {};
         try {
@@ -218,17 +202,30 @@ export class Agent {
         let toolOutputStr = '';
         let isToolError = false;
 
-        if (!toolDef) {
+        if (this.isAborted) {
+          toolOutputStr = 'Cancelled before execution';
+          isToolError = true;
+        } else if (!toolDef) {
           toolOutputStr = `Error: Unknown tool "${toolName}"`;
           isToolError = true;
         } else {
           try {
-            const execResult = await toolDef.execute(parsedArgs, {
+            const validatedArgs = toolDef.parameters.parse(parsedArgs);
+            if (this.mode === 'ask' && !readOnlyTools.has(toolName)) throw new Error('Ask mode allows reading only');
+            if (toolDef.requiresApproval) {
+              this.setStatus('waiting_approval', `Approve ${toolName} to continue`);
+              const approved = await this.requestApproval?.(toolName, parsedArgs, this.currentAbortController.signal);
+              if (!approved || this.isAborted) throw new Error('Tool execution was not approved');
+              this.setStatus('acting', `Executing ${toolName}`);
+            }
+            const execResult = await toolDef.execute(validatedArgs, {
               cwd: this.cwd,
               sessionId: 'current',
               env: {},
+              signal: this.currentAbortController.signal,
               emitEvent: (ev) => this.emit(ev),
             });
+            if (execResult && typeof execResult === 'object' && (('exitCode' in execResult && execResult.exitCode !== 0) || execResult.success === false)) isToolError = true;
             toolOutputStr = typeof execResult === 'string' ? execResult : JSON.stringify(execResult, null, 2);
           } catch (execErr: any) {
             toolOutputStr = `Tool Execution Error: ${execErr.message || String(execErr)}`;
@@ -252,6 +249,7 @@ export class Agent {
           tool_call_id: tc.id,
           content: toolOutputStr,
           timestamp: Date.now(),
+          metadata: { error: isToolError },
         };
 
         sessionMessages.push(toolMsg);
@@ -259,7 +257,14 @@ export class Agent {
       }
     }
 
-    this.setStatus('idle');
+    if (!this.isAborted && iteration >= this.maxIterations && this.status !== 'done' && this.status !== 'error') {
+      this.setStatus('error', `Stopped after ${this.maxIterations} cycles. Review progress and continue the task.`);
+    }
+    if (this.isAborted) this.setStatus('idle', 'Cancelled');
     return sessionMessages;
+    } finally {
+      this.running = false;
+      this.currentAbortController = null;
+    }
   }
 }

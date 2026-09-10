@@ -29,6 +29,10 @@ async function main() {
   const agent = new Agent({
     cwd,
     llm,
+    requestApproval: (action, details, signal) => new Promise(resolve => {
+      if (signal.aborted) { resolve(false); return; }
+      rl.question(`\nAllow ${action}: ${JSON.stringify(details)}? [y/N] `, answer => resolve(answer.trim().toLowerCase() === 'y'));
+    }),
     onEvent: (event: AgentEvent) => {
       if (event.type === 'token_stream') {
         process.stdout.write(event.delta);

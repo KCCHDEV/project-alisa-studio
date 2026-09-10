@@ -26,9 +26,15 @@ export class ContextCompactor {
       return { compacted: messages, wasCompacted: false, charsSaved: 0 };
     }
 
-    const head = messages.slice(0, this.preserveFirstN);
-    const tail = messages.slice(-this.preserveLastN);
-    const middle = messages.slice(this.preserveFirstN, -this.preserveLastN);
+    // Never split an assistant tool-call message from its tool results.
+    let headEnd = this.preserveFirstN;
+    while (headEnd < messages.length && messages[headEnd].role === 'tool') headEnd++;
+    let tailStart = messages.length - this.preserveLastN;
+    while (tailStart > 0 && messages[tailStart].role === 'tool') tailStart--;
+    if (headEnd >= tailStart) return { compacted: messages, wasCompacted: false, charsSaved: 0 };
+    const head = messages.slice(0, headEnd);
+    const tail = messages.slice(tailStart);
+    const middle = messages.slice(headEnd, tailStart);
 
     // Summarize middle tool calls and lengthy outputs
     let summaryContent = `[ระบบบีบอัด Context อัตโนมัติ: ย่อข้อมูลประวัติการรันเครื่องมือ ${middle.length} รายการ เพื่อรักษา Token Budget]`;

@@ -1,31 +1,28 @@
 {
   "name": "project-alisa",
   "version": "1.0.0",
-  "description": "Project Alisa Studio — Personal AI Coding & Automation Harness",
+  "description": "Project Alisa Studio \u0e42\u20ac\u201d Personal AI Coding & Automation Harness",
   "type": "module",
-  "main": "dist-electron/main.cjs",
   "scripts": {
     "dev": "vite",
+    "dev:all": "concurrently --kill-others-on-fail \"bun run src/server/index.ts\" \"bun run dev\"",
     "build:ui": "vite build",
-    "build:electron": "bun build src/server/index.ts --target=node --format=cjs --outfile=dist-electron/server.cjs && bun build src/electron/main.ts --target=node --format=cjs --outfile=dist-electron/main.cjs --external electron --external electron-updater && bun build src/electron/preload.ts --target=node --format=cjs --outfile=dist-electron/preload.cjs --external electron",
-    "build": "bun run build:ui && bun run build:electron",
-    "dist": "bun run build && electron-builder --win nsis portable",
-    "dist:win": "bun run build && electron-builder --win nsis portable",
-    "dist:nsis": "bun run build && electron-builder --win nsis",
-    "dist:mac": "bun run build && electron-builder --mac dmg zip",
-    "dist:all": "bun run build && electron-builder -mw",
-    "dist:dir": "bun run build && electron-builder --win --dir",
+    "build": "bun run typecheck && bun run build:ui",
     "preview": "vite preview",
     "server": "bun run src/server/index.ts",
     "cli": "bun run src/cli/index.ts",
-    "start": "concurrently -k \"bun run src/server/index.ts\" \"bun run dev\"",
-    "start:electron": "bun run build && electron .",
-    "release:win": "bun run build && electron-builder --win nsis portable --publish always",
-    "release:mac": "bun run build && electron-builder --mac dmg zip --publish always"
+    "start": "bun run dev:all",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "dist": "bun run tauri:build",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "build:server": "bun run scripts/build-server.ts"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2",
     "clsx": "^2.1.1",
-    "electron-updater": "^6.8.9",
     "lucide-react": "^0.475.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -34,6 +31,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2",
     "@types/node": "^22.13.4",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
@@ -41,94 +39,10 @@
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
     "concurrently": "^10.0.5",
-    "electron": "^44.2.0",
-    "electron-builder": "^26.15.3",
     "postcss": "^8.5.2",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.3",
     "vite": "^6.1.0",
     "wait-on": "^9.1.0"
-  },
-  "build": {
-    "appId": "com.project.alisa",
-    "productName": "Project Alisa Studio",
-    "publish": {
-      "provider": "github",
-      "owner": "KCCHDEV",
-      "repo": "project-alisa-studio",
-      "releaseType": "release"
-    },
-    "directories": {
-      "output": "release"
-    },
-    "win": {
-      "target": [
-        "nsis",
-        "portable"
-      ],
-      "icon": "public/avatar.png"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "Project Alisa Studio",
-      "uninstallDisplayName": "Project Alisa Studio",
-      "runAfterFinish": true
-    },
-    "mac": {
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        },
-        {
-          "target": "zip",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        }
-      ],
-      "category": "public.app-category.developer-tools",
-      "icon": "public/avatar.png",
-      "darkModeSupport": true,
-      "identity": null
-    },
-    "dmg": {
-      "title": "Project Alisa Installer",
-      "contents": [
-        {
-          "x": 130,
-          "y": 220
-        },
-        {
-          "x": 410,
-          "y": 220,
-          "type": "link",
-          "path": "/Applications"
-        }
-      ]
-    },
-    "files": [
-      "dist/**/*",
-      "dist-electron/**/*",
-      "public/**/*",
-      "package.json"
-    ],
-    "extraResources": [
-      {
-        "from": "dist-electron",
-        "to": "dist-electron"
-      },
-      {
-        "from": "dist",
-        "to": "dist"
-      }
-    ]
   }
 }

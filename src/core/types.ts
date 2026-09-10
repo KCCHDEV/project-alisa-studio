@@ -41,6 +41,7 @@ export interface ExecutionContext {
   sessionId: string;
   env: Record<string, string>;
   emitEvent: (event: AgentEvent) => void;
+  signal?: AbortSignal;
   requestApproval?: (action: string, details: Record<string, any>) => Promise<boolean>;
 }
 

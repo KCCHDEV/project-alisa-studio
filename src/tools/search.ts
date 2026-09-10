@@ -1,3 +1,4 @@
+import { resolveWorkspacePath } from '../core/workspace';
 import { z } from 'zod';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -15,7 +16,7 @@ export const searchFilesTool: ToolDefinition<z.input<typeof SearchFilesInputSche
   description: 'Search for text or regex patterns across files in the workspace.',
   parameters: SearchFilesInputSchema,
   execute: async (args, context) => {
-    const rootDir = path.isAbsolute(args.path || '.') ? (args.path || '.') : path.join(context.cwd, args.path || '.');
+    const rootDir = resolveWorkspacePath(context.cwd, args.path || '.');
     const matches: Array<{ file: string; line: number; text: string }> = [];
     const maxResults = args.max_results || 50;
 

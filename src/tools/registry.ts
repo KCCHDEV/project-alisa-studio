@@ -47,55 +47,29 @@ export class ToolRegistry {
   }
 
   private zodSchemaToJson(schema: any): Record<string, any> {
-    try {
-      const shape = schema._def?.shape?.() || schema.shape || {};
-      const properties: Record<string, any> = {};
-      const required: string[] = [];
-
-      for (const [key, propSchema] of Object.entries<any>(shape)) {
-        let typeName = 'string';
-        let description = (propSchema._def?.description) || '';
-        let isOptional = false;
-
-        let def = propSchema._def;
-        while (def) {
-          if (def.typeName === 'ZodOptional' || def.typeName === 'ZodDefault') {
-            isOptional = true;
-            def = def.innerType?._def;
-          } else if (def.typeName === 'ZodNumber') {
-            typeName = 'number';
-            break;
-          } else if (def.typeName === 'ZodBoolean') {
-            typeName = 'boolean';
-            break;
-          } else if (def.typeName === 'ZodArray') {
-            typeName = 'array';
-            break;
-          } else if (def.typeName === 'ZodObject') {
-            typeName = 'object';
-            break;
-          } else {
-            break;
-          }
+    const def = schema._def;
+    let result: Record<string, any>;
+    switch (def.typeName) {
+      case 'ZodOptional': case 'ZodDefault':
+        result = this.zodSchemaToJson(def.innerType); break;
+      case 'ZodString': result = { type: 'string' }; break;
+      case 'ZodNumber': result = { type: 'number' }; break;
+      case 'ZodBoolean': result = { type: 'boolean' }; break;
+      case 'ZodEnum': result = { type: 'string', enum: def.values }; break;
+      case 'ZodLiteral': result = { type: typeof def.value, enum: [def.value] }; break;
+      case 'ZodArray': result = { type: 'array', items: this.zodSchemaToJson(def.type) }; break;
+      case 'ZodObject': {
+        const properties: Record<string, any> = {};
+        const required: string[] = [];
+        for (const [key, value] of Object.entries<any>(def.shape())) {
+          properties[key] = this.zodSchemaToJson(value);
+          if (!value.isOptional()) required.push(key);
         }
-
-        properties[key] = {
-          type: typeName,
-          description,
-        };
-
-        if (!isOptional) {
-          required.push(key);
-        }
+        result = { type: 'object', properties, required }; break;
       }
-
-      return {
-        type: 'object',
-        properties,
-        required,
-      };
-    } catch {
-      return { type: 'object', properties: {} };
+      default: throw new Error(`Unsupported tool parameter schema: ${def.typeName}`);
     }
+    if (schema.description) result.description = schema.description;
+    return result;
   }
 }

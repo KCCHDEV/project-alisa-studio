@@ -1,14 +1,17 @@
 @echo off
 setlocal
-title Project Alisa Studio
+title Project Alisa Studio — Tauri Desktop
 echo ===================================================
-echo     🍓 Starting Project Alisa Studio...
+echo     🍓 Starting Project Alisa Studio (Tauri)...
 echo ===================================================
 cd /d "%~dp0"
-start "Project Alisa Backend" /min cmd /c "bun run src/server/index.ts"
-start "Project Alisa UI" /min cmd /c "bun run dev -- --host 127.0.0.1"
 
-echo Waiting for the UI to become ready...
-call bunx --bun wait-on http://127.0.0.1:3000
-start "" http://127.0.0.1:3000
+echo Launching Alisa Studio Desktop App...
+where bun >nul 2>nul
+if %errorlevel% equ 0 (
+    call bun run tauri:dev
+) else (
+    call npm run tauri:dev
+)
+
 pause

@@ -1,3 +1,4 @@
+import { resolveWorkspacePath } from '../core/workspace';
 import { z } from 'zod';
 import { spawn } from 'child_process';
 import type { ToolDefinition } from '../core/types.ts';
@@ -7,7 +8,7 @@ const gatekeeper = new ASTSecurityGatekeeper();
 
 export const TerminalInputSchema = z.object({
   command: z.string().describe('The bash/shell command to execute in the workspace'),
-  timeout_s: z.number().optional().default(60).describe('Timeout in seconds (default 60s)'),
+  timeout_s: z.number().min(1).max(300).optional().default(60).describe('Timeout in seconds (default 60s)'),
   workdir: z.string().optional().describe('Optional directory to execute command from'),
 });
 
@@ -17,7 +18,7 @@ export const terminalTool: ToolDefinition<z.input<typeof TerminalInputSchema>, {
   name: 'terminal',
   description: 'Execute shell/bash commands safely on the local machine with real-time output and timeout protection.',
   parameters: TerminalInputSchema,
-  requiresApproval: false,
+  requiresApproval: true,
   execute: async (args, context) => {
     // Audit command via AST Security Gatekeeper
     const audit = gatekeeper.auditTerminalCommand(args.command);
@@ -30,7 +31,9 @@ export const terminalTool: ToolDefinition<z.input<typeof TerminalInputSchema>, {
     }
 
     const startTime = Date.now();
-    const targetDir = args.workdir || context.cwd;
+    args = TerminalInputSchema.parse(args);
+    context.signal?.throwIfAborted();
+    const targetDir = resolveWorkspacePath(context.cwd, args.workdir || '.');
     const isWindows = process.platform === 'win32';
     const shell = isWindows ? (process.env.ComSpec || 'cmd.exe') : '/bin/bash';
     const shellArgs = isWindows ? ['/d', '/s', '/c', args.command] : ['-c', args.command];
@@ -44,21 +47,28 @@ export const terminalTool: ToolDefinition<z.input<typeof TerminalInputSchema>, {
         cwd: targetDir,
         env: { ...process.env, ...context.env },
         windowsHide: true,
+        detached: !isWindows,
       });
 
-      const timer = setTimeout(() => {
-        if (!isDone) {
-          isDone = true;
-          try {
-            proc.kill();
-          } catch {}
-          resolve({
-            output: `[Command timed out after ${args.timeout_s}s]\n${stdout}\n${stderr}`.trim(),
-            exitCode: -1,
-            durationMs: Date.now() - startTime,
-          });
+      let stopReason = '';
+      const stop = (reason: string) => {
+        if (isDone || stopReason) return;
+        stopReason = reason;
+        if (isWindows && proc.pid) {
+          const killer = spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { windowsHide: true });
+          killer.on('error', () => proc.kill());
+        } else if (proc.pid) {
+          try { process.kill(-proc.pid, 'SIGKILL'); } catch { proc.kill('SIGKILL'); }
         }
-      }, (args.timeout_s || 60) * 1000);
+      };
+      const onAbort = () => stop('Cancelled by user');
+      context.signal?.addEventListener('abort', onAbort, { once: true });
+      if (context.signal?.aborted) onAbort();
+      const timer = setTimeout(() => stop(`Command timed out after ${args.timeout_s}s`), (args.timeout_s || 60) * 1000);
+      const cleanup = () => {
+        clearTimeout(timer);
+        context.signal?.removeEventListener('abort', onAbort);
+      };
 
       proc.stdout.on('data', (data) => {
         const chunk = data.toString();
@@ -79,7 +89,7 @@ export const terminalTool: ToolDefinition<z.input<typeof TerminalInputSchema>, {
       proc.on('error', (err) => {
         if (!isDone) {
           isDone = true;
-          clearTimeout(timer);
+          cleanup();
           resolve({
             output: `Error spawning command: ${err.message}`,
             exitCode: 1,
@@ -91,11 +101,11 @@ export const terminalTool: ToolDefinition<z.input<typeof TerminalInputSchema>, {
       proc.on('close', (code) => {
         if (!isDone) {
           isDone = true;
-          clearTimeout(timer);
+          cleanup();
           const combined = (stdout + (stderr ? `\n[STDERR]\n${stderr}` : '')).trim();
           resolve({
-            output: combined || '(Command produced no output)',
-            exitCode: code ?? 0,
+            output: (stopReason ? `[${stopReason}]\n` : '') + (combined || '(Command produced no output)'),
+            exitCode: stopReason ? -1 : (code ?? -1),
             durationMs: Date.now() - startTime,
           });
         }

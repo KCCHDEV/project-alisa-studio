@@ -3,6 +3,7 @@ node_modules/
 dist/
 dist-electron/
 release/
+src-tauri/target/
 
 # Logs & Cache
 *.log
@@ -40,3 +41,7 @@ builder-debug.yml
 .alisa-sessions/
 .ichigo-snapshots/
 work.md
+
+src-tauri/binaries/
+
+.alisa-schedules.json*
