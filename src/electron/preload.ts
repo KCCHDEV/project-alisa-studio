@@ -14,5 +14,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   updateTouchBarStatus: (data: { status?: string; text?: string; color?: string }) => {
     ipcRenderer.send('update-touchbar-status', data);
-  }
+  },
+  checkForUpdates: () => ipcRenderer.invoke('updater-check'),
+  downloadUpdate: () => ipcRenderer.invoke('updater-download'),
+  installUpdate: () => ipcRenderer.invoke('updater-install'),
+  onUpdaterState: (callback: (state: {
+    status: string;
+    version?: string;
+    percent?: number;
+    message?: string;
+  }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: {
+      status: string;
+      version?: string;
+      percent?: number;
+      message?: string;
+    }) => callback(state);
+    ipcRenderer.on('updater-state', handler);
+    return () => ipcRenderer.removeListener('updater-state', handler);
+  },
 });

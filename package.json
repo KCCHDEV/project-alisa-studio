@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build:ui": "vite build",
-    "build:electron": "bun build src/server/index.ts --target=node --format=cjs --outfile=dist-electron/server.cjs && bun build src/electron/main.ts --target=node --format=cjs --outfile=dist-electron/main.cjs --external electron && bun build src/electron/preload.ts --target=node --format=cjs --outfile=dist-electron/preload.cjs --external electron",
+    "build:electron": "bun build src/server/index.ts --target=node --format=cjs --outfile=dist-electron/server.cjs && bun build src/electron/main.ts --target=node --format=cjs --outfile=dist-electron/main.cjs --external electron --external electron-updater && bun build src/electron/preload.ts --target=node --format=cjs --outfile=dist-electron/preload.cjs --external electron",
     "build": "bun run build:ui && bun run build:electron",
     "dist": "bun run build && electron-builder --win nsis portable",
     "dist:win": "bun run build && electron-builder --win nsis portable",
@@ -19,10 +19,13 @@
     "server": "bun run src/server/index.ts",
     "cli": "bun run src/cli/index.ts",
     "start": "concurrently -k \"bun run src/server/index.ts\" \"bun run dev\"",
-    "start:electron": "bun run build && electron ."
+    "start:electron": "bun run build && electron .",
+    "release:win": "bun run build && electron-builder --win nsis portable --publish always",
+    "release:mac": "bun run build && electron-builder --mac dmg zip --publish always"
   },
   "dependencies": {
     "clsx": "^2.1.1",
+    "electron-updater": "^6.8.9",
     "lucide-react": "^0.475.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -49,6 +52,12 @@
   "build": {
     "appId": "com.project.alisa",
     "productName": "Project Alisa Studio",
+    "publish": {
+      "provider": "github",
+      "owner": "KCCHDEV",
+      "repo": "project-alisa-studio",
+      "releaseType": "release"
+    },
     "directories": {
       "output": "release"
     },

@@ -58,7 +58,8 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Save,
-  CircleDot
+  CircleDot,
+  Download
 } from 'lucide-react';
 
 interface FileNode {
@@ -105,6 +106,13 @@ interface QuickCommand {
   category: string;
 }
 
+interface UpdateState {
+  status: 'idle' | 'dev' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error';
+  version?: string;
+  percent?: number;
+  message?: string;
+}
+
 function renderAssistantContent(content: string): React.ReactNode {
   const chunks = content.split(/(```[\s\S]*?```)/g);
   return chunks.map((chunk, index) => {
@@ -128,6 +136,13 @@ const API_BASE = (typeof window !== 'undefined' && (window.location.protocol ===
   ? 'http://localhost:3001'
   : '';
 
+const MODEL_OPTIONS = [
+  { id: 'auto/best-coding', label: 'Auto — Balanced', description: 'Best fit for coding tasks' },
+  { id: 'auto/best-fast', label: 'Best Fast', description: 'Quick answers for small changes' },
+  { id: 'deepseek/deepseek-chat', label: 'DeepSeek Chat', description: 'General purpose assistant' },
+  { id: 'openai/gpt-4o-mini', label: 'GPT-4o mini', description: 'Fast OpenAI-compatible model' },
+];
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<'chat' | 'editor' | 'terminal' | 'skills'>('chat');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -147,7 +162,11 @@ export default function App() {
   const [editorError, setEditorError] = useState<string | null>(null);
   const [isWorkspaceLoading, setIsWorkspaceLoading] = useState(true);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    return window.matchMedia('(min-width: 768px)').matches;
+  });
+  const [sidebarView, setSidebarView] = useState<'sessions' | 'files'>('sessions');
   
   // OpenClaude Skills System State
   const [skills, setSkills] = useState<SkillItem[]>([]);
@@ -237,6 +256,10 @@ export default function App() {
   const [terminalCommand, setTerminalCommand] = useState('');
   const [isTerminalRunning, setIsTerminalRunning] = useState(false);
   const [terminalError, setTerminalError] = useState<string | null>(null);
+  const [showModelPicker, setShowModelPicker] = useState(false);
+  const [updateState, setUpdateState] = useState<UpdateState>({ status: 'idle' });
+  const [isUpdateActionRunning, setIsUpdateActionRunning] = useState(false);
+  const [updateNoticeDismissed, setUpdateNoticeDismissed] = useState(false);
 
   // Settings state
   const [showSettings, setShowSettings] = useState(false);
@@ -266,6 +289,16 @@ export default function App() {
   }, [messages, streamingContent, activeToolTraces]);
 
   useEffect(() => {
+    const unsubscribe = window.electronAPI?.onUpdaterState?.((nextState) => {
+      setUpdateState(nextState as UpdateState);
+      if (nextState.status === 'available' || nextState.status === 'downloaded') {
+        setUpdateNoticeDismissed(false);
+      }
+    });
+    return () => unsubscribe?.();
+  }, []);
+
+  useEffect(() => {
     const media = window.matchMedia('(min-width: 768px)');
     const syncSidebar = () => setIsSidebarOpen(media.matches);
     syncSidebar();
@@ -283,6 +316,7 @@ export default function App() {
         setShowCommandPalette(false);
         setShowWorkspacePicker(false);
         setShowSettings(false);
+        setShowModelPicker(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -290,11 +324,8 @@ export default function App() {
     if (window.electronAPI?.onTouchBarEvent) {
       window.electronAPI.onTouchBarEvent((eventName: string) => {
         if (eventName === 'touchbar-new-chat') {
-          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify({ type: 'clear_history' }));
-          }
-          setMessages([]);
-          addTerminalLog('🧹 [TouchBar] Started New Chat Session.');
+          handleNewChat();
+          addTerminalLog('⌘ [Touch Bar] New chat session ready.');
         } else if (eventName === 'touchbar-command-palette') {
           setShowCommandPalette((prev) => !prev);
         } else if (eventName === 'touchbar-new-project') {
@@ -612,6 +643,83 @@ export default function App() {
     }
   };
 
+  const handleNewChat = () => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'clear_history' }));
+    }
+    setMessages([]);
+    setStreamingContent('');
+    setStreamingThought('');
+    streamingContentRef.current = '';
+    streamingThoughtRef.current = '';
+    setActiveToolTraces([]);
+    activeToolTracesRef.current = [];
+    setStatus('idle');
+    setStatusDetail(isBackendConnected ? 'Ready' : 'Backend offline');
+    setActiveTab('chat');
+    setInputPrompt('');
+    addTerminalLog('🧹 Started new chat session.');
+  };
+
+  const handleSelectModel = async (nextModel: string) => {
+    const previousModel = model;
+    setModel(nextModel);
+    setShowModelPicker(false);
+    try {
+      const res = await fetch(`${API_BASE}/api/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: nextModel }),
+      });
+      if (!res.ok) throw new Error(`Model switch failed (${res.status})`);
+      addTerminalLog(`🤖 Model selected: ${nextModel}`);
+    } catch (err) {
+      setModel(previousModel);
+      addTerminalLog(`⚠️ ${err instanceof Error ? err.message : 'Unable to switch model'}`);
+    }
+  };
+
+  const handleCheckForUpdates = async () => {
+    if (isUpdateActionRunning) return;
+    setIsUpdateActionRunning(true);
+    try {
+      if (window.electronAPI?.checkForUpdates) {
+        const nextState = await window.electronAPI.checkForUpdates();
+        setUpdateState(nextState as UpdateState);
+        addTerminalLog(`⬆️ ${nextState.message || 'Update check finished.'}`);
+      } else {
+        const nextState: UpdateState = { status: 'dev', message: 'Update checks are available after installing the app.' };
+        setUpdateState(nextState);
+        addTerminalLog(`⬆️ ${nextState.message}`);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to check for updates.';
+      setUpdateState({ status: 'error', message });
+      addTerminalLog(`❌ ${message}`);
+    } finally {
+      setIsUpdateActionRunning(false);
+    }
+  };
+
+  const handleDownloadUpdate = async () => {
+    if (!window.electronAPI?.downloadUpdate || isUpdateActionRunning) return;
+    setIsUpdateActionRunning(true);
+    try {
+      const nextState = await window.electronAPI.downloadUpdate();
+      setUpdateState(nextState as UpdateState);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to download update.';
+      setUpdateState({ status: 'error', message });
+    } finally {
+      setIsUpdateActionRunning(false);
+    }
+  };
+
+  const handleInstallUpdate = async () => {
+    if (!window.electronAPI?.installUpdate) return;
+    await window.electronAPI.installUpdate();
+  };
+
   const handleServerEvent = (data: any) => {
     const appendServerMessage = (message: any) => {
       if (!message || (message.role !== 'user' && message.role !== 'assistant')) return;
@@ -927,23 +1035,29 @@ export default function App() {
   const workspaceLabel = workspaceDir.split(/[\\/]/).filter(Boolean).pop() || 'No workspace selected';
   const isBusy = status === 'thinking' || status === 'acting' || status === 'waiting_approval' || status === 'self_correcting';
   const editorDirty = Boolean(selectedFile) && editorDraft !== fileContent;
+  const selectedModel = MODEL_OPTIONS.find((option) => option.id === model);
+  const recentSessionPrompts = messages
+    .filter((message) => message.role === 'user' && message.content.trim())
+    .slice(-8)
+    .reverse();
+  const updateBannerVisible = !updateNoticeDismissed && ['available', 'downloading', 'downloaded', 'error'].includes(updateState.status);
   return (
-    <div className="flex h-screen min-h-0 flex-col bg-[#0b0d10] text-[#e7e9ee] font-sans">
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-[#252a33] bg-[#11141a] px-3 sm:px-5">
+    <div className="alisa-shell flex h-screen min-h-0 flex-col bg-[#0b0d10] text-[#e7e9ee] font-sans">
+      <header className="alisa-topbar flex h-14 shrink-0 items-center justify-between border-b border-[#252a33] bg-[#11141a] px-3 sm:px-5">
         <div className="flex min-w-0 items-center gap-2.5">
           <button type="button" onClick={() => setIsSidebarOpen((open) => !open)} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-transparent text-[#aab2c0] transition hover:border-[#333b48] hover:bg-[#1a1f27] hover:text-white md:hidden" aria-label="Toggle workspace explorer">
             {isSidebarOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
           </button>
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#f4f5f7] text-sm font-bold text-[#12151a] shadow-sm">A</div>
-          <div className="min-w-0 leading-tight"><div className="truncate text-sm font-semibold tracking-tight text-white">Project Alisa Studio</div><div className="hidden text-[11px] text-[#7f8998] sm:block">AI coding workspace</div></div>
+          <div className="alisa-brand-mark flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#f4f5f7] text-sm font-bold text-[#12151a] shadow-sm">A</div>
+          <div className="min-w-0 leading-tight"><div className="alisa-brand-name truncate text-sm font-semibold tracking-tight text-white">Project Alisa Studio</div><div className="hidden text-[11px] text-[#7f8998] sm:block">AI coding workspace</div></div>
           <div className="hidden h-6 w-px bg-[#2a303b] lg:block" />
-          <div className="hidden min-w-0 items-center gap-2 rounded-lg border border-[#29313d] bg-[#171b22] px-3 py-1.5 lg:flex" title={workspaceDir}><Folder className="h-3.5 w-3.5 shrink-0 text-[#93a4bd]" /><span className="max-w-[240px] truncate text-xs font-medium text-[#c4cbd6]">{workspaceLabel}</span></div>
+          <div className="alisa-workspace-badge hidden min-w-0 items-center gap-2 rounded-lg border border-[#29313d] bg-[#171b22] px-3 py-1.5 lg:flex" title={workspaceDir}><Folder className="h-3.5 w-3.5 shrink-0 text-[#93a4bd]" /><span className="max-w-[240px] truncate text-xs font-medium text-[#c4cbd6]">{workspaceLabel}</span></div>
         </div>
 
-        <div className="hidden items-center gap-2 lg:flex"><div className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs ${isBackendConnected ? 'border-[#24583a] bg-[#132319] text-[#9be7b0]' : 'border-[#5b4720] bg-[#251f12] text-[#f2c56d]'}`}><span className={`h-2 w-2 rounded-full ${statusDot}`} /><span>{statusLabel}</span>{visibleStatusDetail && <span className="max-w-[180px] truncate text-[#7f8998]">{visibleStatusDetail}</span>}</div></div>
+        <div className="hidden items-center gap-2 lg:flex"><div className={`alisa-status-pill flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs ${isBackendConnected ? 'border-[#24583a] bg-[#132319] text-[#9be7b0]' : 'border-[#5b4720] bg-[#251f12] text-[#f2c56d]'}`}><span className={`h-2 w-2 rounded-full ${statusDot}`} /><span>{statusLabel}</span>{visibleStatusDetail && <span className="max-w-[180px] truncate text-[#7f8998]">{visibleStatusDetail}</span>}</div></div>
 
         <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-          <button type="button" onClick={() => { if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ type: 'clear_history' })); setMessages([]); setStreamingContent(''); setStreamingThought(''); setActiveToolTraces([]); addTerminalLog('🧹 Started New Chat Session.'); setActiveTab('chat'); }} className="hidden h-9 items-center gap-1.5 rounded-lg border border-[#303744] bg-[#1a1f27] px-3 text-xs font-medium text-[#c4cbd6] transition hover:border-[#4a5567] hover:bg-[#222832] hover:text-white sm:inline-flex"><Plus className="h-3.5 w-3.5" /> New chat</button>
+          <button type="button" onClick={handleNewChat} className="alisa-topbar-new hidden h-9 items-center gap-1.5 rounded-lg border border-[#303744] bg-[#1a1f27] px-3 text-xs font-medium text-[#c4cbd6] transition hover:border-[#4a5567] hover:bg-[#222832] hover:text-white sm:inline-flex"><Plus className="h-3.5 w-3.5" /> New chat</button>
           <button type="button" disabled={isBusy} onClick={handleOpenWorkspacePicker} className="hidden h-9 items-center gap-1.5 rounded-lg border border-[#303744] bg-[#1a1f27] px-3 text-xs font-medium text-[#c4cbd6] transition hover:border-[#4a5567] hover:bg-[#222832] hover:text-white disabled:cursor-not-allowed disabled:opacity-45 sm:inline-flex"><Folder className="h-3.5 w-3.5" /> Workspace</button>
           <button type="button" onClick={() => setShowCommandPalette(true)} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#303744] bg-[#1a1f27] px-2.5 text-xs font-medium text-[#c4cbd6] transition hover:border-[#4a5567] hover:bg-[#222832] hover:text-white sm:px-3" title="Command palette (Ctrl+K)"><Command className="h-3.5 w-3.5" /><span className="hidden sm:inline">Commands</span><kbd className="hidden rounded bg-[#252c37] px-1.5 py-0.5 text-[10px] text-[#8f9aaa] sm:inline">Ctrl K</kbd></button>
           <button type="button" onClick={() => { setSettingsError(null); setShowSettings(true); }} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-transparent text-[#aab2c0] transition hover:border-[#333b48] hover:bg-[#1a1f27] hover:text-white" aria-label="Open settings"><Settings className="h-4 w-4" /></button>
@@ -952,20 +1066,60 @@ export default function App() {
 
       <div className="relative flex min-h-0 flex-1">
         {isSidebarOpen && <button type="button" aria-label="Dismiss explorer overlay" onClick={() => setIsSidebarOpen(false)} className="fixed inset-0 z-30 bg-black/60 md:hidden" />}
-        <aside className={`absolute inset-y-0 left-0 z-40 flex w-[min(86vw,18rem)] flex-col border-r border-[#252a33] bg-[#11141a] shadow-2xl transition-transform duration-200 md:relative md:z-0 md:w-72 md:translate-x-0 md:shadow-none ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-          <div className="flex h-[4.5rem] shrink-0 items-center justify-between border-b border-[#252a33] px-4"><div className="min-w-0"><div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#aeb7c5]"><FolderTree className="h-4 w-4 text-[#8192ac]" /> Explorer</div><div className="mt-1 truncate text-xs text-[#687487]" title={workspaceDir}>{workspaceLabel}</div></div><div className="flex items-center gap-1"><button type="button" onClick={fetchWorkspaceFiles} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[#778396] transition hover:bg-[#1d232c] hover:text-white" aria-label="Refresh files"><RefreshCw className={`h-3.5 w-3.5 ${isWorkspaceLoading ? 'animate-spin' : ''}`} /></button><button type="button" onClick={() => setIsSidebarOpen(false)} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[#778396] transition hover:bg-[#1d232c] hover:text-white md:hidden" aria-label="Close explorer"><X className="h-4 w-4" /></button></div></div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-2.5 py-3 custom-scrollbar">{fileTree.length > 0 ? <div className="space-y-0.5">{renderFileTree(fileTree)}</div> : isWorkspaceLoading ? <div className="space-y-2 px-2 py-3 text-xs text-[#778396]"><div className="h-3 w-3/4 animate-pulse rounded bg-[#202630]" /><div className="h-3 w-1/2 animate-pulse rounded bg-[#202630]" /><div className="h-3 w-2/3 animate-pulse rounded bg-[#202630]" /></div> : workspaceError ? <div className="m-1 rounded-lg border border-[#59343b] bg-[#27181d] p-3 text-xs leading-relaxed text-[#f0a9b1]"><p>{workspaceError}</p><button type="button" onClick={fetchWorkspaceFiles} className="mt-2 font-medium text-[#ffd4d8] underline underline-offset-2">Try again</button></div> : <div className="m-1 rounded-lg border border-dashed border-[#303744] p-4 text-center text-xs leading-relaxed text-[#778396]">No files in this workspace yet.</div>}</div>
-          <div className="shrink-0 border-t border-[#252a33] px-4 py-3"><div className="flex items-center gap-2 text-xs text-[#7e8999]"><span className={`h-2 w-2 rounded-full ${isBackendConnected ? 'bg-[#4fd27b]' : 'bg-[#d9a84e]'}`} /> {isBackendConnected ? 'Connected to local agent' : 'Waiting for local agent'}</div><div className="mt-1 truncate text-[11px] text-[#5f6b7d]" title={model}>{model}</div></div>
+        <aside className={`alisa-sidebar absolute inset-y-0 left-0 z-40 flex w-[min(86vw,19rem)] flex-col border-r border-[#252a33] bg-[#11141a] shadow-2xl transition-transform duration-200 md:relative md:z-0 md:w-72 md:translate-x-0 md:shadow-none ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+          <div className="flex h-[4.5rem] shrink-0 items-center justify-between border-b border-[#252a33] px-4">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#aeb7c5]"><Layers className="h-4 w-4 text-[#8da4c6]" /> Workspace</div>
+              <div className="mt-1 truncate text-xs text-[#687487]" title={workspaceDir}>{workspaceLabel}</div>
+            </div>
+            <div className="flex items-center gap-1">
+              {sidebarView === 'files' && <button type="button" onClick={fetchWorkspaceFiles} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[#778396] transition hover:bg-[#1d232c] hover:text-white" aria-label="Refresh files"><RefreshCw className={`h-3.5 w-3.5 ${isWorkspaceLoading ? 'animate-spin' : ''}`} /></button>}
+              <button type="button" onClick={() => setIsSidebarOpen(false)} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[#778396] transition hover:bg-[#1d232c] hover:text-white md:hidden" aria-label="Close workspace sidebar"><X className="h-4 w-4" /></button>
+            </div>
+          </div>
+
+          <div className="px-3 pt-3">
+            <div className="grid grid-cols-2 gap-1 rounded-xl border border-[#252d38] bg-[#0d1015] p-1" role="tablist" aria-label="Workspace navigation">
+              <button type="button" role="tab" aria-selected={sidebarView === 'sessions'} onClick={() => setSidebarView('sessions')} className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-semibold transition ${sidebarView === 'sessions' ? 'bg-[#252d38] text-white shadow-sm' : 'text-[#7f8da1] hover:bg-[#1a2028] hover:text-[#d8dde6]'}`}><CircleDot className="h-3.5 w-3.5" /> Sessions<span className="text-[10px] text-[#687487]">{recentSessionPrompts.length}</span></button>
+              <button type="button" role="tab" aria-selected={sidebarView === 'files'} onClick={() => setSidebarView('files')} className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-semibold transition ${sidebarView === 'files' ? 'bg-[#252d38] text-white shadow-sm' : 'text-[#7f8da1] hover:bg-[#1a2028] hover:text-[#d8dde6]'}`}><FolderTree className="h-3.5 w-3.5" /> Files</button>
+            </div>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar">
+            {sidebarView === 'sessions' ? (
+              <div className="space-y-5 px-3 pb-4 pt-3">
+                <button type="button" onClick={handleNewChat} className="alisa-primary-action flex w-full items-center justify-center gap-2 rounded-xl bg-[#f0f2f5] px-3 py-2.5 text-sm font-semibold text-[#13161b] shadow-sm transition hover:bg-white"><Plus className="h-4 w-4" /> New session</button>
+                <section aria-labelledby="current-session-heading">
+                  <div id="current-session-heading" className="mb-2 px-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#687487]">Current session</div>
+                  <button type="button" onClick={() => { setActiveTab('chat'); if (window.innerWidth < 768) setIsSidebarOpen(false); }} className="alisa-session-current group flex w-full items-start gap-3 rounded-xl border border-[#3e4c60] bg-[#1a222d] p-3 text-left transition hover:border-[#657895] hover:bg-[#202a37]"><span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#2c3a4d] text-[#a9c0df]"><Bot className="h-4 w-4" /></span><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-white">Project Alisa Studio</span><span className="mt-1 block truncate text-xs text-[#8d9aae]">{recentSessionPrompts[0]?.content || 'Ready for your next task'}</span></span><span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-[#4fd27b]" title="Active session" /></button>
+                </section>
+                <section aria-labelledby="recent-sessions-heading">
+                  <div className="mb-2 flex items-center justify-between px-1"><div id="recent-sessions-heading" className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#687487]">Recent prompts</div>{recentSessionPrompts.length > 0 && <span className="text-[10px] text-[#536176]">{recentSessionPrompts.length}</span>}</div>
+                  {recentSessionPrompts.length > 0 ? <div className="space-y-1">{recentSessionPrompts.map((prompt, index) => <button key={`${prompt.id}-${index}`} type="button" onClick={() => { setInputPrompt(prompt.content); setActiveTab('chat'); if (window.innerWidth < 768) setIsSidebarOpen(false); }} className="flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-[#9aa7b9] transition hover:bg-[#1a2028] hover:text-white"><span className="mt-0.5 shrink-0 text-[#53647b]">{index === 0 ? <CircleDot className="h-3 w-3 text-[#8da4c6]" /> : <ArrowRight className="h-3 w-3" />}</span><span className="line-clamp-2 min-w-0 leading-5">{prompt.content}</span></button>)}</div> : <div className="rounded-xl border border-dashed border-[#2b333f] px-3 py-4 text-center text-xs leading-5 text-[#687487]">Your recent prompts will appear here.</div>}
+                </section>
+              </div>
+            ) : (
+              <div className="px-2.5 py-3">{fileTree.length > 0 ? <div className="space-y-0.5">{renderFileTree(fileTree)}</div> : isWorkspaceLoading ? <div className="space-y-2 px-2 py-3 text-xs text-[#778396]"><div className="h-3 w-3/4 animate-pulse rounded bg-[#202630]" /><div className="h-3 w-1/2 animate-pulse rounded bg-[#202630]" /><div className="h-3 w-2/3 animate-pulse rounded bg-[#202630]" /></div> : workspaceError ? <div className="m-1 rounded-lg border border-[#59343b] bg-[#27181d] p-3 text-xs leading-relaxed text-[#f0a9b1]"><p>{workspaceError}</p><button type="button" onClick={fetchWorkspaceFiles} className="mt-2 font-medium text-[#ffd4d8] underline underline-offset-2">Try again</button></div> : <div className="m-1 rounded-lg border border-dashed border-[#303744] p-4 text-center text-xs leading-relaxed text-[#778396]">No files in this workspace yet.</div>}</div>
+            )}
+          </div>
+
+          <div className="shrink-0 border-t border-[#252a33] px-3 py-3">
+            <button type="button" onClick={handleOpenWorkspacePicker} className="mb-3 flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-xs text-[#8d9aae] transition hover:bg-[#1a2028] hover:text-white"><Folder className="h-3.5 w-3.5 text-[#8da4c6]" /><span className="min-w-0 flex-1 truncate">Switch workspace</span><ArrowRight className="h-3.5 w-3.5 text-[#53647b]" /></button>
+            <div className="flex items-center gap-2 text-xs text-[#7e8999]"><span className={`h-2 w-2 rounded-full ${isBackendConnected ? 'bg-[#4fd27b]' : 'bg-[#d9a84e]'}`} /> {isBackendConnected ? 'Connected to local agent' : 'Waiting for local agent'}</div>
+            <div className="mt-1 truncate text-[11px] text-[#5f6b7d]" title={model}>{model}</div>
+          </div>
         </aside>
 
-        <main className="min-w-0 flex flex-1 flex-col bg-[#0b0d10]">
-          <div className="flex h-12 shrink-0 items-center gap-2 border-b border-[#252a33] bg-[#11141a] px-3 sm:px-4"><button type="button" onClick={() => setIsSidebarOpen(true)} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[#8f9aaa] hover:bg-[#1d232c] hover:text-white md:hidden" aria-label="Open explorer"><PanelLeftOpen className="h-4 w-4" /></button><nav className="tab-scroll flex min-w-0 items-center gap-1 overflow-x-auto" aria-label="Workspace views">{[{ id: 'chat' as const, label: 'Chat', icon: Bot }, { id: 'skills' as const, label: 'Skills', icon: Puzzle, count: skills.length }, { id: 'editor' as const, label: 'Editor', icon: Code2 }, { id: 'terminal' as const, label: 'Activity', icon: Activity, count: terminalLogs.length }].map((tab) => { const Icon = tab.icon; return <button key={tab.id} type="button" onClick={() => setActiveTab(tab.id)} aria-current={activeTab === tab.id ? 'page' : undefined} className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition sm:px-3 ${activeTab === tab.id ? 'bg-[#252c37] text-white shadow-sm' : 'text-[#8290a3] hover:bg-[#1a2028] hover:text-[#d8dde6]'}`}><Icon className="h-3.5 w-3.5" /><span>{tab.label}</span>{tab.count !== undefined && <span className={`rounded px-1.5 py-0.5 text-[10px] ${activeTab === tab.id ? 'bg-[#353e4c] text-[#dce3ee]' : 'bg-[#1a2028] text-[#728096]'}`}>{tab.count}</span>}</button>; })}</nav><div className={`ml-auto hidden shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] lg:flex ${isBackendConnected ? 'border-[#24583a] bg-[#132319] text-[#9be7b0]' : 'border-[#5b4720] bg-[#251f12] text-[#f2c56d]'}`}><span className={`h-1.5 w-1.5 rounded-full ${isBackendConnected ? 'bg-[#4fd27b]' : 'bg-[#d9a84e]'}`} />{isBackendConnected ? 'Agent online' : 'Agent offline'}</div></div>
+        <main className="alisa-main min-w-0 flex flex-1 flex-col bg-[#0b0d10]">
+          <div className="flex h-12 shrink-0 items-center gap-2 border-b border-[#252a33] bg-[#11141a] px-3 sm:px-4"><button type="button" onClick={() => setIsSidebarOpen(true)} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[#8f9aaa] hover:bg-[#1d232c] hover:text-white md:hidden" aria-label="Open workspace sidebar"><PanelLeftOpen className="h-4 w-4" /></button><nav className="tab-scroll flex min-w-0 items-center gap-1 overflow-x-auto" aria-label="Workspace views">{[{ id: 'chat' as const, label: 'Chat', icon: Bot }, { id: 'skills' as const, label: 'Skills', icon: Puzzle, count: skills.length }, { id: 'editor' as const, label: 'Editor', icon: Code2 }, { id: 'terminal' as const, label: 'Activity', icon: Activity, count: terminalLogs.length }].map((tab) => { const Icon = tab.icon; return <button key={tab.id} type="button" onClick={() => setActiveTab(tab.id)} aria-current={activeTab === tab.id ? 'page' : undefined} className={`alisa-tab ${activeTab === tab.id ? 'alisa-tab-active' : ''} inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition sm:px-3 ${activeTab === tab.id ? 'bg-[#252c37] text-white shadow-sm' : 'text-[#8290a3] hover:bg-[#1a2028] hover:text-[#d8dde6]'}`}><Icon className="h-3.5 w-3.5" /><span>{tab.label}</span>{tab.count !== undefined && <span className={`rounded px-1.5 py-0.5 text-[10px] ${activeTab === tab.id ? 'bg-[#353e4c] text-[#dce3ee]' : 'bg-[#1a2028] text-[#728096]'}`}>{tab.count}</span>}</button>; })}</nav><div className={`ml-auto hidden shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] lg:flex ${isBackendConnected ? 'border-[#24583a] bg-[#132319] text-[#9be7b0]' : 'border-[#5b4720] bg-[#251f12] text-[#f2c56d]'}`}><span className={`h-1.5 w-1.5 rounded-full ${isBackendConnected ? 'bg-[#4fd27b]' : 'bg-[#d9a84e]'}`} />{isBackendConnected ? 'Agent online' : 'Agent offline'}</div></div>
+
+          {updateBannerVisible && <div role="status" className={`flex flex-wrap items-center gap-3 border-b px-4 py-2.5 text-xs sm:px-6 ${updateState.status === 'error' ? 'border-[#59343b] bg-[#27181d] text-[#f0a9b1]' : 'border-[#3d4a5d] bg-[#17202b] text-[#cbd9eb]'}`}><span className="inline-flex items-center gap-2 font-semibold text-white">{updateState.status === 'available' && <Download className="h-3.5 w-3.5 text-[#8da4c6]" />}{updateState.status === 'downloading' && <RefreshCw className="h-3.5 w-3.5 animate-spin text-[#8da4c6]" />}{updateState.status === 'downloaded' && <CheckCircle2 className="h-3.5 w-3.5 text-[#7ee787]" />}{updateState.status === 'error' && <AlertCircle className="h-3.5 w-3.5 text-[#ff8a80]" />}<span>{updateState.status === 'available' ? `Update ${updateState.version || ''} available` : updateState.status === 'downloaded' ? 'Update ready to install' : updateState.status === 'downloading' ? `Downloading update${updateState.percent !== undefined ? ` · ${updateState.percent}%` : '…'}` : 'Update check failed'}</span></span><span className="min-w-0 flex-1 text-[#8f9db0]">{updateState.message}</span>{updateState.status === 'available' && <button type="button" onClick={handleDownloadUpdate} disabled={isUpdateActionRunning} className="rounded-lg bg-[#f0f2f5] px-3 py-1.5 font-semibold text-[#13161b] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50">{isUpdateActionRunning ? 'Starting…' : 'Download'}</button>}{updateState.status === 'downloaded' && <button type="button" onClick={handleInstallUpdate} className="rounded-lg bg-[#7ee787] px-3 py-1.5 font-semibold text-[#102016] transition hover:bg-[#a3f0ae]">Restart to update</button>}{updateState.status === 'error' && <button type="button" onClick={handleCheckForUpdates} disabled={isUpdateActionRunning} className="rounded-lg border border-[#6d4850] px-3 py-1.5 font-semibold text-[#ffd4d8] transition hover:bg-[#3a2025] disabled:cursor-not-allowed disabled:opacity-50">Try again</button>}<button type="button" aria-label="Dismiss update notice" onClick={() => setUpdateNoticeDismissed(true)} className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[#7e8da1] transition hover:bg-[#202b39] hover:text-white"><X className="h-3.5 w-3.5" /></button></div>}
 
           <div className="min-h-0 flex-1">
-            {activeTab === 'chat' && <div className="flex h-full min-h-0 flex-col"><div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar"><div className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 py-6 sm:px-6 sm:py-8">{messages.length === 0 && !streamingContent && activeToolTraces.length === 0 && <div className="flex flex-1 flex-col items-center justify-start py-10 text-center sm:justify-center sm:py-20"><div className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#f4f5f7] text-xl font-bold text-[#12151a] shadow-[0_12px_28px_rgba(0,0,0,.28)]">A</div><p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-[#8290a3]">Project Alisa Studio</p><h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">What are we building today?</h1><p className="mt-3 max-w-lg text-sm leading-6 text-[#8995a7]">Ask Alisa to inspect your workspace, explain a file, or make a focused change.</p><div className="mt-8 grid w-full max-w-2xl grid-cols-1 gap-3 sm:grid-cols-3">{[['Inspect project', 'สรุปโครงสร้างโปรเจกต์', FolderTree], ['Find a bug', 'วิเคราะห์บั๊กให้หน่อย', Bug], ['Improve a file', 'ปรับปรุงไฟล์นี้ให้ดีขึ้น', Sparkles]].map(([label, prompt, Icon]) => { const PromptIcon = Icon as typeof FolderTree; return <button key={label as string} type="button" onClick={() => { setInputPrompt(prompt as string); setActiveTab('chat'); }} className="group rounded-xl border border-[#2b333f] bg-[#151a21] p-4 text-left transition hover:-translate-y-0.5 hover:border-[#53647b] hover:bg-[#1b222c]"><span className="mb-3 inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[#202936] text-[#a9b9d0] group-hover:text-white"><PromptIcon className="h-4 w-4" /></span><span className="block text-sm font-medium text-[#e5e9ef]">{label as string}</span><span className="mt-1 block text-xs text-[#7d899b]">{prompt as string}</span></button>; })}</div></div>}
+            {activeTab === 'chat' && <div className="flex h-full min-h-0 flex-col"><div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar"><div className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 py-6 sm:px-6 sm:py-8">{messages.length === 0 && !streamingContent && activeToolTraces.length === 0 && <div className="alisa-hero flex flex-1 flex-col items-center justify-start py-10 text-center sm:justify-center sm:py-20"><div className="alisa-hero-mark mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#f4f5f7] text-xl font-bold text-[#12151a] shadow-[0_12px_28px_rgba(0,0,0,.28)]">A</div><p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-[#8290a3]">Project Alisa Studio</p><h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">What are we building today?</h1><p className="mt-3 max-w-lg text-sm leading-6 text-[#8995a7]">Ask Alisa to inspect your workspace, explain a file, or make a focused change.</p><div className="mt-8 grid w-full max-w-2xl grid-cols-1 gap-3 sm:grid-cols-3">{[['Inspect project', 'สรุปโครงสร้างโปรเจกต์', FolderTree], ['Find a bug', 'วิเคราะห์บั๊กให้หน่อย', Bug], ['Improve a file', 'ปรับปรุงไฟล์นี้ให้ดีขึ้น', Sparkles]].map(([label, prompt, Icon]) => { const PromptIcon = Icon as typeof FolderTree; return <button key={label as string} type="button" onClick={() => { setInputPrompt(prompt as string); setActiveTab('chat'); }} className="alisa-suggestion-card group rounded-xl border border-[#2b333f] bg-[#151a21] p-4 text-left transition hover:-translate-y-0.5 hover:border-[#53647b] hover:bg-[#1b222c]"><span className="mb-3 inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[#202936] text-[#a9b9d0] group-hover:text-white"><PromptIcon className="h-4 w-4" /></span><span className="block text-sm font-medium text-[#e5e9ef]">{label as string}</span><span className="mt-1 block text-xs text-[#7d899b]">{prompt as string}</span></button>; })}</div></div>}
             {messages.map((m, messageIndex) => <div key={m.id} className={m.role === 'user' ? 'flex justify-end' : 'flex gap-3'}>{m.role === 'assistant' && <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#f4f5f7] text-xs font-bold text-[#12151a]">A</div>}<div className={m.role === 'user' ? 'max-w-[85%] sm:max-w-[75%]' : 'min-w-0 max-w-[88%] sm:max-w-[78%]'}>{m.role === 'user' ? <div className="rounded-2xl rounded-br-md bg-[#2a3442] px-4 py-3 text-sm leading-6 text-[#f1f4f8] shadow-sm">{m.content}</div> : <div className="space-y-3">{m.toolTraces?.map((trace, idx) => <div key={`${trace.toolCallId}-${idx}`} className="rounded-xl border border-[#2b333f] bg-[#151a21] p-3 text-xs"><div className="flex flex-wrap items-center gap-2"><span className="rounded bg-[#222b38] px-2 py-1 font-mono text-[10px] font-semibold uppercase tracking-wide text-[#b6c6dc]">{trace.toolName}</span><span className={`rounded px-2 py-1 text-[10px] font-medium ${trace.status === 'success' ? 'bg-[#183322] text-[#8ce0a7]' : trace.status === 'error' ? 'bg-[#3a2025] text-[#f2a2aa]' : 'bg-[#3b3019] text-[#f1c671]'}`}>{trace.status}</span></div>{(trace.result || trace.error) && <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-[#0d1015] p-2.5 font-mono text-[11px] leading-5 text-[#9da8b8]">{trace.error || trace.result}</pre>}</div>)}{m.thought && <details className="rounded-xl border border-[#2b333f] bg-[#12171e] text-xs text-[#8c99aa]"><summary className="cursor-pointer px-3 py-2 font-medium text-[#aab6c7]">Reasoning trace</summary><div className="border-t border-[#252d38] px-3 py-2.5 whitespace-pre-wrap leading-5">{m.thought}</div></details>}<div className="rounded-2xl rounded-tl-md border border-[#252d38] bg-[#151a21] px-4 py-3.5 text-sm leading-6 text-[#e1e6ed] shadow-sm"><div className="whitespace-pre-wrap">{m.content ? renderAssistantContent(m.content) : 'No response content.'}</div></div><div className="mt-2 flex items-center gap-3"><button type="button" onClick={() => handleRetryMessage(messageIndex)} disabled={isBusy} className="inline-flex items-center gap-1.5 text-xs font-medium text-[#8290a3] transition hover:text-white disabled:cursor-not-allowed disabled:opacity-40"><RefreshCw className="h-3.5 w-3.5" /> Retry</button></div></div>}<div className={`mt-1.5 text-[10px] text-[#637083] ${m.role === 'user' ? 'text-right' : ''}`}>{m.role === 'user' ? 'You' : 'Alisa'} · {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div></div></div>)}
             {(streamingContent || streamingThought || activeToolTraces.length > 0) && <div className="flex gap-3"><div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#f4f5f7] text-xs font-bold text-[#12151a]">A</div><div className="min-w-0 max-w-[88%] space-y-3 sm:max-w-[78%]">{activeToolTraces.map((trace, idx) => <div key={`${trace.toolCallId}-${idx}`} className="rounded-xl border border-[#3d3523] bg-[#1b1811] p-3 text-xs"><div className="flex items-center gap-2"><span className="rounded bg-[#332a18] px-2 py-1 font-mono text-[10px] uppercase text-[#f1c671]">{trace.toolName}</span><span className="text-[#c89d45]">Running…</span></div></div>)}{streamingThought && <details open className="rounded-xl border border-[#2b333f] bg-[#12171e] text-xs text-[#8c99aa]"><summary className="cursor-pointer px-3 py-2 font-medium text-[#aab6c7]">Reasoning trace</summary><div className="border-t border-[#252d38] px-3 py-2.5 whitespace-pre-wrap leading-5">{streamingThought}</div></details>}{streamingContent && <div className="rounded-2xl rounded-tl-md border border-[#252d38] bg-[#151a21] px-4 py-3.5 text-sm leading-6 text-[#e1e6ed] whitespace-pre-wrap">{renderAssistantContent(streamingContent)}<span className="ml-1 inline-block h-4 w-1 animate-pulse bg-[#8da4c6] align-[-2px]" /></div>}</div></div>}
-            <div ref={chatEndRef} /></div></div><div className="shrink-0 border-t border-[#252a33] bg-[#11141a] px-3 py-3 sm:px-6 sm:py-4"><div className="mx-auto max-w-4xl"><div className="rounded-2xl border border-[#303846] bg-[#151a21] shadow-[0_12px_30px_rgba(0,0,0,.16)] focus-within:border-[#53647b]"><textarea rows={3} value={inputPrompt} onChange={(e) => setInputPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendPrompt(); } }} placeholder="Ask Alisa to inspect, explain, or change your code…" aria-label="Message Alisa" className="min-h-[92px] w-full resize-none bg-transparent px-4 py-3.5 text-sm leading-6 text-white placeholder-[#687487] focus:outline-none" /><div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#252d38] px-3 py-2.5"><div className="flex items-center gap-2"><button type="button" onClick={() => setShowCommandPalette(true)} className="inline-flex items-center gap-1.5 rounded-lg bg-[#202733] px-2.5 py-1.5 text-xs font-medium text-[#a9b6c8] transition hover:bg-[#293341] hover:text-white"><Command className="h-3.5 w-3.5" /> Actions</button><span className="inline-flex items-center gap-1.5 rounded-lg bg-[#202733] px-2.5 py-1.5 text-xs text-[#8d9aae]"><Puzzle className="h-3.5 w-3.5 text-[#c6a15a]" /> {activeSkillNames.length} skills</span></div><div className="flex items-center gap-2"><span className="hidden text-[11px] text-[#637083] sm:inline">Enter to send · Shift+Enter for a new line</span>{isBusy ? <button type="button" onClick={handleAbortTask} className="inline-flex items-center gap-1.5 rounded-lg bg-[#3a2025] px-3.5 py-2 text-xs font-semibold text-[#f2a2aa] transition hover:bg-[#4a252c]"><Square className="h-3.5 w-3.5 fill-current" /> Stop</button> : <button type="button" onClick={() => handleSendPrompt()} disabled={!inputPrompt.trim() || !isBackendConnected} className="inline-flex items-center gap-1.5 rounded-lg bg-[#f0f2f5] px-3.5 py-2 text-xs font-semibold text-[#13161b] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"><Send className="h-3.5 w-3.5" /> Send</button>}</div></div></div><p className="mt-2 text-center text-[11px] text-[#637083]">Alisa can change files in the active workspace. Review edits before shipping.</p></div></div></div>}
+            <div ref={chatEndRef} /></div></div><div className="shrink-0 border-t border-[#252a33] bg-[#11141a] px-3 py-3 sm:px-6 sm:py-4"><div className="mx-auto max-w-4xl"><div className="alisa-composer relative rounded-2xl border border-[#303846] bg-[#151a21] shadow-[0_12px_30px_rgba(0,0,0,.16)] focus-within:border-[#53647b]"><textarea rows={3} value={inputPrompt} onChange={(e) => setInputPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendPrompt(); } }} placeholder="Ask Alisa to inspect, explain, or change your code…" aria-label="Message Alisa" className="min-h-[92px] w-full resize-none bg-transparent px-4 py-3.5 text-sm leading-6 text-white placeholder-[#687487] focus:outline-none" /><div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#252d38] px-3 py-2.5"><div className="flex min-w-0 items-center gap-2"><button type="button" onClick={() => setShowModelPicker((open) => !open)} aria-haspopup="listbox" aria-expanded={showModelPicker} className="alisa-model-trigger inline-flex min-w-0 items-center gap-1.5 rounded-lg bg-[#202733] px-2.5 py-1.5 text-xs font-medium text-[#c3d0e2] transition hover:bg-[#293341] hover:text-white"><Sparkles className="h-3.5 w-3.5 shrink-0 text-[#c6a15a]" /><span className="max-w-[9rem] truncate">{selectedModel?.label || model}</span><ChevronDown className={`h-3.5 w-3.5 shrink-0 text-[#718097] transition-transform ${showModelPicker ? 'rotate-180' : ''}`} /></button><button type="button" onClick={() => setShowCommandPalette(true)} className="inline-flex items-center gap-1.5 rounded-lg bg-[#202733] px-2.5 py-1.5 text-xs font-medium text-[#a9b6c8] transition hover:bg-[#293341] hover:text-white"><Command className="h-3.5 w-3.5" /><span className="hidden sm:inline">Actions</span></button><span className="hidden items-center gap-1.5 rounded-lg bg-[#202733] px-2.5 py-1.5 text-xs text-[#8d9aae] sm:inline-flex"><Puzzle className="h-3.5 w-3.5 text-[#c6a15a]" /> {activeSkillNames.length} skills</span></div><div className="flex items-center gap-2"><span className="hidden text-[11px] text-[#637083] sm:inline">Enter to send · Shift+Enter for a new line</span>{isBusy ? <button type="button" onClick={handleAbortTask} className="inline-flex items-center gap-1.5 rounded-lg bg-[#3a2025] px-3.5 py-2 text-xs font-semibold text-[#f2a2aa] transition hover:bg-[#4a252c]"><Square className="h-3.5 w-3.5 fill-current" /> Stop</button> : <button type="button" onClick={() => handleSendPrompt()} disabled={!inputPrompt.trim() || !isBackendConnected} className="alisa-primary-action inline-flex items-center gap-1.5 rounded-lg bg-[#f0f2f5] px-3.5 py-2 text-xs font-semibold text-[#13161b] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"><Send className="h-3.5 w-3.5" /> Send</button>}</div></div>{showModelPicker && <div className="alisa-model-menu absolute bottom-14 left-3 z-20 w-[min(19rem,calc(100%-1.5rem))] overflow-hidden rounded-xl border border-[#3a4351] bg-[#1b2028] p-1.5 shadow-[0_18px_46px_rgba(0,0,0,.48)]" role="listbox" aria-label="Choose model"><div className="px-2.5 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#687487]">Models</div>{MODEL_OPTIONS.map((option) => <button key={option.id} type="button" role="option" aria-selected={model === option.id} onClick={() => handleSelectModel(option.id)} className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2.5 text-left transition ${model === option.id ? 'bg-[#2b3543] text-white' : 'text-[#c0c9d6] hover:bg-[#252d38] hover:text-white'}`}><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[#273241] text-[#c6a15a]"><Sparkles className="h-3.5 w-3.5" /></span><span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium">{option.label}</span><span className="mt-0.5 block truncate text-[10px] text-[#7f8da1]">{option.description}</span></span>{model === option.id && <Check className="h-3.5 w-3.5 shrink-0 text-[#7ee787]" />}</button>)}<button type="button" onClick={() => { setShowModelPicker(false); setShowSettings(true); }} className="mt-1 flex w-full items-center gap-2 border-t border-[#303846] px-2.5 py-2.5 text-left text-xs font-medium text-[#9aa8ba] transition hover:text-white"><Sliders className="h-3.5 w-3.5" /> Manage model settings</button></div>}<p className="mt-2 text-center text-[11px] text-[#637083]">Alisa can change files in the active workspace. Review edits before shipping.</p></div></div></div></div>}
 
 
             {activeTab === 'skills' && <div className="h-full overflow-y-auto custom-scrollbar"><div className="mx-auto max-w-5xl space-y-6 px-4 py-6 sm:px-6 sm:py-8"><div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#b8a2da]">Agent configuration</p><h1 className="mt-2 text-2xl font-semibold tracking-tight text-white">Skills</h1><p className="mt-2 text-sm leading-6 text-[#8995a7]">Choose the guidance Alisa should use for this session.</p></div><button type="button" onClick={fetchSkills} className="inline-flex items-center gap-2 rounded-lg border border-[#303846] bg-[#1a1f27] px-3.5 py-2.5 text-sm font-medium text-[#c4cbd6] transition hover:border-[#53647b] hover:bg-[#222832] hover:text-white"><RefreshCw className="h-3.5 w-3.5" /> Refresh</button></div><div className="grid grid-cols-1 gap-3 lg:grid-cols-2">{skills.map((skill) => { const isActive = activeSkillNames.includes(skill.name); return <div key={skill.name} className={`rounded-2xl border p-4 transition ${isActive ? 'border-[#4a4161] bg-[#1b1824]' : 'border-[#2b333f] bg-[#151a21]'}`}><div className="flex items-start justify-between gap-4"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="break-all text-sm font-medium text-white">{skill.name}</h2><span className="rounded bg-[#252d38] px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-[#8f9aaa]">{skill.category}</span></div><p className="mt-2 text-sm leading-5 text-[#8995a7]">{skill.description}</p><p className="mt-3 text-[11px] text-[#637083]">{skill.source}</p></div><button type="button" onClick={() => toggleSkillActive(skill.name)} className={`shrink-0 rounded-lg px-3 py-2 text-xs font-semibold transition ${isActive ? 'bg-[#c7b0e7] text-[#211b2b] hover:bg-[#d7c5ef]' : 'border border-[#394454] bg-[#202733] text-[#a9b6c8] hover:border-[#657895] hover:text-white'}`}>{isActive ? 'Enabled' : 'Enable'}</button></div></div>; })}</div>{skills.length === 0 && <div className="rounded-2xl border border-dashed border-[#303846] p-8 text-center text-sm text-[#778396]">No skills were found. Refresh to try again.</div>}</div></div>}
@@ -998,7 +1152,7 @@ export default function App() {
 
       {showWorkspacePicker && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) setShowWorkspacePicker(false); }}><form onSubmit={(event) => { event.preventDefault(); handleSwitchWorkspace(); }} className="w-full max-w-lg rounded-2xl border border-[#3a4351] bg-[#151a21] p-5 shadow-[0_24px_70px_rgba(0,0,0,.5)] sm:p-6" role="dialog" aria-modal="true" aria-label="Switch workspace"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#8da4c6]">Workspace</p><h2 className="mt-1 text-lg font-semibold text-white">Switch project folder</h2><p className="mt-1 text-sm leading-5 text-[#8995a7]">Alisa will read and edit files inside this folder.</p></div><button type="button" onClick={() => setShowWorkspacePicker(false)} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[#8290a3] hover:bg-[#202733] hover:text-white" aria-label="Close"><X className="h-4 w-4" /></button></div><label htmlFor="workspace-path" className="mt-6 block text-xs font-medium text-[#a9b6c8]">Absolute path</label><input id="workspace-path" type="text" value={workspaceInput} onChange={(event) => setWorkspaceInput(event.target.value)} placeholder="C:/Users/you/Projects/my-app" autoFocus className="mt-2 w-full rounded-xl border border-[#303846] bg-[#0d1015] px-3.5 py-3 text-sm text-white outline-none transition focus:border-[#657895]" />{workspaceSwitchError && <div className="mt-3 rounded-xl border border-[#59343b] bg-[#27181d] px-3 py-2.5 text-xs leading-5 text-[#f0a9b1]">{workspaceSwitchError}</div>}<div className="mt-6 flex justify-end gap-2 border-t border-[#2b333f] pt-4"><button type="button" onClick={() => setShowWorkspacePicker(false)} className="rounded-lg border border-[#303846] bg-[#1a1f27] px-3.5 py-2.5 text-sm font-medium text-[#a9b6c8] hover:border-[#53647b] hover:text-white">Cancel</button><button type="submit" className="rounded-lg bg-[#f0f2f5] px-3.5 py-2.5 text-sm font-semibold text-[#13161b] hover:bg-white">Switch workspace</button></div></form></div>}
 
-      {showSettings && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) setShowSettings(false); }}><form onSubmit={(event) => { event.preventDefault(); handleSaveConfig(); }} className="w-full max-w-lg rounded-2xl border border-[#3a4351] bg-[#151a21] p-5 shadow-[0_24px_70px_rgba(0,0,0,.5)] sm:p-6" role="dialog" aria-modal="true" aria-label="Project settings"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#b8a2da]">Configuration</p><h2 className="mt-1 text-lg font-semibold text-white">Project settings</h2><p className="mt-1 text-sm leading-5 text-[#8995a7]">Connect Alisa to your model gateway and workspace.</p></div><button type="button" onClick={() => setShowSettings(false)} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[#8290a3] hover:bg-[#202733] hover:text-white" aria-label="Close"><X className="h-4 w-4" /></button></div><div className="mt-6 space-y-4"><div><label htmlFor="settings-api-key" className="text-xs font-medium text-[#a9b6c8]">API key</label><input id="settings-api-key" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={apiKeyMasked ? 'Stored key (' + apiKeyMasked + ') · enter a new key to replace it' : 'Enter API key'} className="mt-2 w-full rounded-xl border border-[#303846] bg-[#0d1015] px-3.5 py-3 text-sm text-white outline-none focus:border-[#657895]" /></div><div><label htmlFor="settings-base-url" className="text-xs font-medium text-[#a9b6c8]">Base URL</label><input id="settings-base-url" type="url" value={baseURL} onChange={(e) => setBaseURL(e.target.value)} className="mt-2 w-full rounded-xl border border-[#303846] bg-[#0d1015] px-3.5 py-3 text-sm text-white outline-none focus:border-[#657895]" /></div><div><label htmlFor="settings-model" className="text-xs font-medium text-[#a9b6c8]">Model</label><input id="settings-model" type="text" value={model} onChange={(e) => setModel(e.target.value)} className="mt-2 w-full rounded-xl border border-[#303846] bg-[#0d1015] px-3.5 py-3 text-sm text-white outline-none focus:border-[#657895]" /></div><div><label htmlFor="settings-workspace" className="text-xs font-medium text-[#a9b6c8]">Workspace directory</label><input id="settings-workspace" type="text" value={workspaceDir} onChange={(e) => setWorkspaceDir(e.target.value)} className="mt-2 w-full rounded-xl border border-[#303846] bg-[#0d1015] px-3.5 py-3 text-sm text-white outline-none focus:border-[#657895]" /></div></div>{settingsError && <div className="mt-4 rounded-xl border border-[#59343b] bg-[#27181d] px-3 py-2.5 text-xs leading-5 text-[#f0a9b1]">{settingsError}</div>}<div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-[#2b333f] pt-4"><button type="button" onClick={async () => { try { addTerminalLog('🔄 Checking for harness updates & pre-installed skills...'); const res = await fetch(`${API_BASE}/api/update/check`); if (!res.ok) throw new Error(`Update check failed (${res.status})`); const data = await res.json(); addTerminalLog(`✨ Update Status: ${data.status} (Version: ${data.version})`); window.alert(`Update Check: ${data.status}`); fetchSkills(); } catch (err: any) { window.alert(`Update check failed: ${err.message}`); } }} className="rounded-lg border border-[#303846] bg-[#1a1f27] px-3 py-2.5 text-xs font-medium text-[#a9b6c8] hover:border-[#53647b] hover:text-white">Check updates</button><div className="flex gap-2"><button type="button" onClick={() => setShowSettings(false)} className="rounded-lg border border-[#303846] bg-[#1a1f27] px-3.5 py-2.5 text-sm font-medium text-[#a9b6c8] hover:border-[#53647b] hover:text-white">Cancel</button><button type="submit" className="rounded-lg bg-[#f0f2f5] px-3.5 py-2.5 text-sm font-semibold text-[#13161b] hover:bg-white">Save changes</button></div></div></form></div>}
+      {showSettings && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) setShowSettings(false); }}><form onSubmit={(event) => { event.preventDefault(); handleSaveConfig(); }} className="w-full max-w-lg rounded-2xl border border-[#3a4351] bg-[#151a21] p-5 shadow-[0_24px_70px_rgba(0,0,0,.5)] sm:p-6" role="dialog" aria-modal="true" aria-label="Project settings"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#b8a2da]">Configuration</p><h2 className="mt-1 text-lg font-semibold text-white">Project settings</h2><p className="mt-1 text-sm leading-5 text-[#8995a7]">Connect Alisa to your model gateway and workspace.</p></div><button type="button" onClick={() => setShowSettings(false)} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[#8290a3] hover:bg-[#202733] hover:text-white" aria-label="Close"><X className="h-4 w-4" /></button></div><div className="mt-6 space-y-4"><div><label htmlFor="settings-api-key" className="text-xs font-medium text-[#a9b6c8]">API key</label><input id="settings-api-key" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={apiKeyMasked ? 'Stored key (' + apiKeyMasked + ') · enter a new key to replace it' : 'Enter API key'} className="mt-2 w-full rounded-xl border border-[#303846] bg-[#0d1015] px-3.5 py-3 text-sm text-white outline-none focus:border-[#657895]" /></div><div><label htmlFor="settings-base-url" className="text-xs font-medium text-[#a9b6c8]">Base URL</label><input id="settings-base-url" type="url" value={baseURL} onChange={(e) => setBaseURL(e.target.value)} className="mt-2 w-full rounded-xl border border-[#303846] bg-[#0d1015] px-3.5 py-3 text-sm text-white outline-none focus:border-[#657895]" /></div><div><label htmlFor="settings-model" className="text-xs font-medium text-[#a9b6c8]">Model</label><input id="settings-model" type="text" value={model} onChange={(e) => setModel(e.target.value)} className="mt-2 w-full rounded-xl border border-[#303846] bg-[#0d1015] px-3.5 py-3 text-sm text-white outline-none focus:border-[#657895]" /></div><div><label htmlFor="settings-workspace" className="text-xs font-medium text-[#a9b6c8]">Workspace directory</label><input id="settings-workspace" type="text" value={workspaceDir} onChange={(e) => setWorkspaceDir(e.target.value)} className="mt-2 w-full rounded-xl border border-[#303846] bg-[#0d1015] px-3.5 py-3 text-sm text-white outline-none focus:border-[#657895]" /></div></div>{settingsError && <div className="mt-4 rounded-xl border border-[#59343b] bg-[#27181d] px-3 py-2.5 text-xs leading-5 text-[#f0a9b1]">{settingsError}</div>}<div className="mt-6 space-y-3 border-t border-[#2b333f] pt-4"><div className="flex flex-wrap items-center gap-2 text-xs text-[#8d9aae]"><span className={`inline-flex h-2 w-2 rounded-full ${updateState.status === 'error' ? 'bg-[#ff5f56]' : updateState.status === 'not-available' ? 'bg-[#4fd27b]' : updateState.status === 'available' || updateState.status === 'downloaded' ? 'bg-[#8da4c6]' : 'bg-[#d9a84e]'}`} /> <span>{updateState.message || 'Check GitHub Releases for a newer Project Alisa Studio build.'}</span></div><div className="flex flex-wrap items-center justify-between gap-3"><button type="button" onClick={handleCheckForUpdates} disabled={isUpdateActionRunning} className="inline-flex items-center gap-2 rounded-lg border border-[#303846] bg-[#1a1f27] px-3 py-2.5 text-xs font-medium text-[#a9b6c8] transition hover:border-[#53647b] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"><RefreshCw className={`h-3.5 w-3.5 ${isUpdateActionRunning ? 'animate-spin' : ''}`} />{isUpdateActionRunning ? 'Checking…' : 'Check for updates'}</button>{updateState.status === 'available' && <button type="button" onClick={handleDownloadUpdate} disabled={isUpdateActionRunning} className="rounded-lg bg-[#f0f2f5] px-3 py-2.5 text-xs font-semibold text-[#13161b] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50">Download update</button>}{updateState.status === 'downloaded' && <button type="button" onClick={handleInstallUpdate} className="rounded-lg bg-[#7ee787] px-3 py-2.5 text-xs font-semibold text-[#102016] transition hover:bg-[#a3f0ae]">Restart to update</button>}<div className="ml-auto flex gap-2"><button type="button" onClick={() => setShowSettings(false)} className="rounded-lg border border-[#303846] bg-[#1a1f27] px-3.5 py-2.5 text-sm font-medium text-[#a9b6c8] hover:border-[#53647b] hover:text-white">Cancel</button><button type="submit" className="rounded-lg bg-[#f0f2f5] px-3.5 py-2.5 text-sm font-semibold text-[#13161b] hover:bg-white">Save changes</button></div></div></div></form></div>}
     </div>
   );
 }

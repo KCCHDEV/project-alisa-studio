@@ -6,6 +6,10 @@ Project Alisa Studio brings streaming AI chat, local file tools, terminal execut
 
 > โปรเจกต์ผู้ช่วยเขียนโค้ดและทำงานอัตโนมัติบนเครื่องของคุณ รองรับการตั้งค่าโมเดลผ่าน API พร้อมเครื่องมือจัดการไฟล์ เทอร์มินัล ประวัติแชต และหน้าต่างเดสก์ท็อป
 
+![Project Alisa Studio home](docs/screenshots/home-desktop.png)
+
+ดูแนวทาง visual และภาพหน้าจอเพิ่มเติมได้ที่ [docs/UI-STYLE.md](docs/UI-STYLE.md)
+
 ## Features
 
 - **Streaming chat:** displays model responses, reasoning when supplied by the provider, tool activity, and agent status.
@@ -18,6 +22,7 @@ Project Alisa Studio brings streaming AI chat, local file tools, terminal execut
 - **Model configuration:** editable API key, base URL, and model identifier, with gateway presets in Settings.
 - **Skills:** discovers local Hermes-style `SKILL.md` files and creates five starter skill documents on server startup. Skill documents are instructions, not separately implemented autonomous workers.
 - **Desktop integration:** Electron window controls and Touch Bar actions/status on compatible MacBook hardware.
+- **In-app updates:** installed builds check GitHub Releases, let you download an update, and restart to install it.
 - **Packaging:** electron-builder configuration for Windows NSIS/portable builds and macOS DMG/ZIP builds.
 
 ## Requirements
@@ -113,7 +118,9 @@ Some internal names retain the original **Ichigo Agent** name for compatibility.
 | `bun run dist:mac` | macOS DMG and ZIP, configured for x64 and arm64 |
 | `bun run dist:dir` | Unpacked Windows application |
 
-Use the matching operating system for packaging. macOS signing is not configured. The GitHub Actions workflow runs for pushes to `main`, pull requests targeting `main`, and `v*` tags. It uploads build artifacts; it does not automatically publish GitHub Releases.
+Use the matching operating system for packaging. macOS signing is not configured. The GitHub Actions workflow runs for pushes to `main`, pull requests targeting `main`, and `v*` tags. A `v*` tag publishes the Windows and macOS installers to a GitHub Release, which is the source used by the installed app's updater.
+
+To publish an update, bump the version in `package.json`, commit it, and push a matching tag (for example `v1.0.1`). GitHub Actions uses the default `GITHUB_TOKEN` permission to write releases. Update checks in a development run intentionally show that an installed build is required.
 
 ## Current limitations and local data
 
