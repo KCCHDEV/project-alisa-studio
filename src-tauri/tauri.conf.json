@@ -1,19 +1,19 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Project Alisa Studio",
-  "version": "1.0.0",
+  "productName": "Project Alisa Studio V2",
+  "version": "2.0.0",
   "identifier": "com.project.alisa",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://127.0.0.1:3050",
-    "beforeDevCommand": "bun run dev:all",
+    "beforeDevCommand": "bun scripts/desktop-dev.ts",
     "beforeBuildCommand": "bun run build && bun run build:server"
   },
   "app": {
     "windows": [
       {
         "label": "main",
-        "title": "Project Alisa Studio \u0e42\u20ac\u201d AI Coding & Automation Studio",
+        "title": "Project Alisa Studio V2 — AI Coding Studio",
         "width": 1300,
         "height": 850,
         "minWidth": 960,

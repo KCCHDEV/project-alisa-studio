@@ -3,6 +3,8 @@ import { terminalTool } from './terminal.ts';
 import { readFileTool, writeFileTool, patchFileTool, listDirTool } from './file-ops.ts';
 import { searchFilesTool } from './search.ts';
 import { manageSkillTool } from './skill-ops.ts';
+import { updatePlanTool } from './plan.ts';
+import { updateGoalTool } from './goal.ts';
 
 export class ToolRegistry {
   private tools = new Map<string, ToolDefinition>();
@@ -15,6 +17,8 @@ export class ToolRegistry {
     this.register(listDirTool);
     this.register(searchFilesTool);
     this.register(manageSkillTool);
+    this.register(updatePlanTool);
+    this.register(updateGoalTool);
   }
 
   register(tool: ToolDefinition) {

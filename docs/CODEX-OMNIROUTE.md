@@ -266,7 +266,7 @@ src/llm/client.ts
 
 ```text
 EDIT
-src/web/App.tsx
+src/web/AppV2.tsx
 +34  -9
 [View diff]
 ```
@@ -399,9 +399,9 @@ enabled
 
 ---
 
-## 15. True subagents — future
+## 15. Staged agent swarm — implemented in V2
 
-Real subagent ควรมี independent:
+V2 มี role worker แยกภายใน backend เดียวกัน โดยแต่ละ worker มี independent:
 
 ```text
 task
@@ -412,20 +412,15 @@ status
 result
 ```
 
-Example:
+รูปแบบที่ใช้งานอยู่:
 
 ```text
-Main Agent
-   ├─ worker: inspect backend
-   ├─ worker: inspect UI
-   └─ worker: inspect tests
-          ↓
-     summarize results
-          ↓
-      main agent edits
+Explorer → Planner → Builder → Reviewer
+      shared workspace / session goal
+      live swarm_update + elapsed time
 ```
 
-ควรเป็น experimental จน cancellation, permission และ context budget เสถียร
+worker ทั้งสี่รันแบบ sequential โดยตั้งใจ เพื่อป้องกันการเขียนไฟล์ชนกันใน workspace เดียวกัน; ทุก worker ใช้ Agent loop, tool permissions และ model config ของตัวเอง. Parallel read-only workers ยังเป็น future enhancement.
 
 ---
 
@@ -592,9 +587,8 @@ Normal CI ใช้ read-only permission และ release jobs เท่าน�
 ### Phase 5 — Advanced agent
 
 - Git/worktree integration
-- True subagents
-- Parallel read-only research tasks
-- Richer context controls
+- Parallel read-only swarm tasks
+- Richer context controls and per-worker budgets
 
 ---
 

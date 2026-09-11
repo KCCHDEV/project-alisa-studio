@@ -9,14 +9,290 @@
     height: 100%;
   }
 
-  body {
-    font-family: 'Plus Jakarta Sans', 'Inter', 'Prompt', -apple-system, sans-serif;
-    background-color: #0b0d10;
-    color: #e7e9ee;
+body {
+    font-family: 'JetBrains Mono', 'Geist Mono', 'SFMono-Regular', 'Cascadia Code', 'Fira Code', monospace;
+    background-color: #000000;
+    color: #f2f2f2;
     margin: 0;
     padding: 0;
-    overflow: hidden;
-  }
+  overflow: hidden;
+}
+
+/* Fast, non-blocking desktop boot mark. The workspace mounts underneath it so
+   the animation never becomes an artificial loading screen. */
+.alisa-boot {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  color: #f2f2f2;
+  pointer-events: none;
+}
+
+.alisa-boot-inner {
+  width: min(360px, calc(100vw - 48px));
+  animation: alisa-boot-rise 360ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.alisa-boot-logo {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: .22em;
+}
+
+.alisa-boot-logo span {
+  color: #8da4c6;
+}
+
+.alisa-boot-version {
+  margin-top: 8px;
+  color: #444;
+  font-size: 9px;
+  letter-spacing: .16em;
+}
+
+.alisa-boot-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 36px;
+  color: #777;
+  font-size: 10px;
+}
+
+.alisa-boot-status span {
+  color: #79d99a;
+  font-size: 9px;
+}
+
+.alisa-boot-status i {
+  width: 5px;
+  height: 13px;
+  border-right: 1px solid #8da4c6;
+  animation: alisa-boot-caret 720ms steps(1, end) infinite;
+}
+
+.alisa-boot-exiting {
+  animation: alisa-boot-fade 220ms ease forwards;
+}
+
+@keyframes alisa-boot-rise {
+  from { opacity: 0; transform: translateY(7px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes alisa-boot-fade {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes alisa-boot-caret {
+  50% { opacity: 0; }
+}
+
+/* Short, compositor-friendly transitions for workspace navigation. These are
+   opacity/transform only so opening a project or panel does not trigger a
+   costly layout animation. */
+.workspace-transition {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, .82);
+  pointer-events: auto;
+  animation: alisa-workspace-in 150ms ease-out both;
+}
+
+.workspace-transition-exit {
+  animation: alisa-workspace-out 180ms ease-in both;
+}
+
+.workspace-transition-inner {
+  width: min(420px, calc(100vw - 48px));
+  font-family: inherit;
+  animation: alisa-surface-in 180ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.workspace-transition-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #d8d8d8;
+  font-size: 11px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.workspace-transition-dot {
+  color: #e5c36a;
+  animation: alisa-pulse 900ms ease-in-out infinite;
+}
+
+.workspace-transition-path {
+  margin-top: 10px;
+  overflow: hidden;
+  color: #666;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-transition-progress {
+  height: 1px;
+  margin-top: 18px;
+  overflow: hidden;
+  background: #1a1a1a;
+}
+
+.workspace-transition-progress span {
+  display: block;
+  width: 38%;
+  height: 100%;
+  background: #6da8ff;
+  animation: alisa-progress 950ms cubic-bezier(.22, 1, .36, 1) infinite;
+}
+
+/* Optional Yurachi companion. It stays quiet and only becomes a compact
+   status marker once a conversation is underway. */
+.yurachi-companion {
+  display: flex;
+  width: min(176px, 42vw);
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  margin: 0 auto 17px;
+  animation: alisa-companion-in 220ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.yurachi-companion > img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  border: 1px solid #202020;
+  object-fit: cover;
+  opacity: .92;
+  animation: alisa-companion-pose-in 180ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.yurachi-companion-caption {
+  color: #555;
+  font-size: 9px;
+  letter-spacing: .13em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.yurachi-companion-caption span {
+  color: #3d3d3d;
+  letter-spacing: .02em;
+  text-transform: none;
+}
+
+.yurachi-companion-mini {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #666;
+  font-size: 9px;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.yurachi-companion-mini img {
+  display: block;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #242424;
+  object-fit: cover;
+  opacity: .9;
+  animation: alisa-companion-pose-in 160ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+@keyframes alisa-companion-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes alisa-companion-pose-in {
+  from { opacity: .2; transform: scale(.96); }
+  to { opacity: .92; transform: scale(1); }
+}
+
+.alisa-surface-enter {
+  transform-origin: bottom center;
+  animation: alisa-surface-in 170ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.alisa-editor-overlay,
+.alisa-modal-backdrop,
+.command-palette-backdrop {
+  animation: alisa-backdrop-in 140ms ease-out both;
+}
+
+.alisa-editor-window,
+.alisa-settings-dialog,
+.alisa-palette-enter {
+  animation: alisa-dialog-in 170ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.project-menu-enter {
+  transform-origin: top left;
+  animation: alisa-menu-in 120ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.alisa-toast {
+  animation: alisa-toast-in 160ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+@keyframes alisa-workspace-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes alisa-workspace-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes alisa-surface-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes alisa-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes alisa-dialog-in {
+  from { opacity: 0; transform: translateY(8px) scale(.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes alisa-menu-in {
+  from { opacity: 0; transform: translateY(-4px) scale(.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes alisa-toast-in {
+  from { opacity: 0; transform: translate(-50%, 6px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@keyframes alisa-pulse {
+  50% { opacity: .35; }
+}
+
+@keyframes alisa-progress {
+  from { transform: translateX(-120%); }
+  to { transform: translateX(360%); }
+}
 
   button,
   input,
@@ -94,139 +370,392 @@
   background: rgba(248, 113, 113, 0.08);
 }
 
-/* Project Alisa Studio visual language: Yurachi's soft pink/blue glow on a
-   focused dark coding canvas. The layout stays dense enough for code while
-   the glass surfaces and gradient accents carry the studio identity. */
+/* VS Code-like syntax layer: the real textarea stays on top for editing while
+   this transparent, pointer-free layer paints the readable token colors. */
+.editor-code-highlight {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  min-width: 100%;
+  min-height: 100%;
+  padding: 14px 20px 14px 56px;
+  pointer-events: none;
+  color: #d4d4d4;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 24px;
+  white-space: pre;
+  will-change: transform;
+}
+
+.editor-code-line {
+  min-width: 100%;
+  min-height: 24px;
+  height: 24px;
+}
+
+.editor-code-line-active {
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.editor-code-input {
+  color: transparent !important;
+  -webkit-text-fill-color: transparent;
+  caret-color: #75beff;
+  tab-size: 2;
+}
+
+.editor-code-input::selection {
+  color: transparent;
+  background: rgba(38, 128, 206, 0.35);
+}
+
+.editor-token-comment { color: #6a9955; }
+.editor-token-string { color: #ce9178; }
+.editor-token-keyword { color: #c586c0; }
+.editor-token-number { color: #b5cea8; }
+.editor-token-function { color: #dcdcaa; }
+.editor-token-type { color: #4ec9b0; }
+.editor-token-constant { color: #569cd6; }
+.editor-token-property { color: #9cdcfe; }
+.editor-token-tag { color: #569cd6; }
+.editor-token-attribute { color: #9cdcfe; }
+.editor-token-operator { color: #d4d4d4; }
+
+/* Project Alisa Studio V2: OpenCode-inspired terminal workspace. */
 .alisa-shell {
-  --alisa-pink: #ef8fbd;
-  --alisa-pink-soft: rgba(239, 143, 189, 0.14);
-  --alisa-blue: #86b3ff;
-  --alisa-blue-soft: rgba(134, 179, 255, 0.14);
-  --alisa-violet: #bba7ff;
+  --alisa-bg: #000000;
+  --alisa-elevated: #080808;
+  --alisa-border: #1a1a1a;
+  --alisa-text: #f2f2f2;
+  --alisa-secondary: #999999;
+  --alisa-muted: #666666;
+  --alisa-blue: #6da8ff;
+  --alisa-green: #79d99a;
+  --alisa-yellow: #e5c36a;
+  --alisa-red: #ef7777;
   position: relative;
   isolation: isolate;
-  background:
-    radial-gradient(circle at 88% -10%, var(--alisa-blue-soft), transparent 28%),
-    radial-gradient(circle at 12% 0%, var(--alisa-pink-soft), transparent 25%),
-    radial-gradient(circle at 72% 105%, rgba(187, 167, 255, 0.08), transparent 30%),
-    linear-gradient(135deg, #0b0d12 0%, #11131b 100%) !important;
+  background: var(--alisa-bg) !important;
+  color: var(--alisa-text);
+  font-family: 'JetBrains Mono', 'Geist Mono', 'SFMono-Regular', 'Cascadia Code', 'Fira Code', monospace;
 }
 
 .alisa-shell::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  opacity: 0.24;
-  background-image:
-    linear-gradient(rgba(170, 182, 221, 0.06) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(170, 182, 221, 0.06) 1px, transparent 1px);
-  background-size: 42px 42px;
-  mask-image: linear-gradient(to bottom, black, transparent 90%);
+  display: none;
 }
 
 .alisa-topbar,
 .alisa-sidebar,
 .alisa-main {
-  backdrop-filter: blur(18px) saturate(125%);
-  -webkit-backdrop-filter: blur(18px) saturate(125%);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .alisa-topbar {
-  background: rgba(17, 20, 27, 0.78) !important;
-  border-color: rgba(174, 188, 226, 0.16) !important;
+  background: #000000 !important;
+  border-color: var(--alisa-border) !important;
 }
 
 .alisa-sidebar {
-  background: rgba(17, 20, 27, 0.86) !important;
-  border-color: rgba(174, 188, 226, 0.16) !important;
+  background: #050505 !important;
+  border-color: var(--alisa-border) !important;
+  contain: layout paint;
+  will-change: width, opacity;
+}
+
+.alisa-inspector {
+  contain: layout paint;
+  will-change: width, opacity;
+}
+
+.terminal-drawer {
+  contain: layout paint;
+  box-shadow: 0 16px 42px rgba(0, 0, 0, .55);
+}
+
+.terminal-drawer-output {
+  contain: strict;
+  overscroll-behavior: contain;
+}
+
+.terminal-field {
+  width: 100%;
+  border: 1px solid #202020;
+  border-radius: 2px;
+  background: #080808;
+  padding: 6px 7px;
+  color: #c8c8c8;
+  font-family: inherit;
+  font-size: 10px;
+  outline: none;
+}
+
+.terminal-field:focus {
+  border-color: #444;
+}
+
+.terminal-field::placeholder {
+  color: #444;
 }
 
 .alisa-main {
-  background: rgba(11, 13, 18, 0.72) !important;
+  background: #000000 !important;
 }
 
-.alisa-brand-mark,
-.alisa-hero-mark {
-  background: linear-gradient(135deg, #f7f8fb 8%, #f4c4db 55%, #a9c8ff 100%) !important;
-  box-shadow: 0 12px 28px rgba(137, 164, 224, 0.22) !important;
+.alisa-shell button,
+.alisa-shell input,
+.alisa-shell textarea,
+.alisa-shell select {
+  font-family: inherit;
 }
 
-.alisa-brand-name {
-  background: linear-gradient(90deg, #f6f7fb 0%, #f1a2c8 50%, #91b9ff 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent !important;
+.alisa-shell button {
+  transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease;
 }
 
-.alisa-workspace-badge,
-.alisa-composer {
-  background: rgba(24, 28, 38, 0.76) !important;
-  border-color: rgba(167, 184, 226, 0.22) !important;
-  box-shadow: 0 18px 52px rgba(5, 8, 16, 0.2) !important;
+.alisa-shell select {
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  background: #080808 !important;
+  border-color: #222 !important;
+  color: #999 !important;
 }
 
-.alisa-topbar-new,
+.alisa-shell select option {
+  background: #080808;
+  color: #f2f2f2;
+}
+
+.alisa-composer,
+.terminal-composer {
+  background: var(--alisa-elevated) !important;
+  border: 1px solid #222 !important;
+  border-radius: 2px !important;
+  box-shadow: none !important;
+}
+
 .alisa-primary-action {
-  border-color: transparent !important;
-  background: linear-gradient(115deg, #eb91bb 0%, #88b1f5 100%) !important;
-  color: #171923 !important;
-  box-shadow: 0 12px 28px rgba(129, 158, 224, 0.2) !important;
+  border: 1px solid #f2f2f2 !important;
+  border-radius: 2px !important;
+  background: #f2f2f2 !important;
+  color: #000 !important;
+  box-shadow: none !important;
 }
 
-.alisa-topbar-new:hover,
 .alisa-primary-action:hover {
-  background: linear-gradient(115deg, #f3a3c8 0%, #9bc0ff 100%) !important;
-  transform: translateY(-1px);
+  background: #ffffff !important;
+  transform: none;
 }
 
 .alisa-tab-active {
-  background: linear-gradient(115deg, rgba(239, 143, 189, 0.2), rgba(134, 179, 255, 0.2)) !important;
-  box-shadow: inset 0 0 0 1px rgba(191, 201, 234, 0.16), 0 7px 18px rgba(8, 11, 20, 0.16) !important;
+  background: #111111 !important;
+  box-shadow: inset 2px 0 0 var(--alisa-blue) !important;
 }
 
 .alisa-session-current,
 .alisa-suggestion-card {
-  background: linear-gradient(135deg, rgba(239, 143, 189, 0.1), rgba(134, 179, 255, 0.1)) !important;
-  border-color: rgba(164, 183, 227, 0.28) !important;
-  box-shadow: 0 14px 34px rgba(8, 11, 20, 0.14) !important;
+  background: #0b0b0b !important;
+  border-color: #2a2a2a !important;
+  box-shadow: none !important;
 }
 
 .alisa-session-current:hover,
 .alisa-suggestion-card:hover {
-  border-color: rgba(198, 190, 247, 0.54) !important;
-  background: linear-gradient(135deg, rgba(239, 143, 189, 0.16), rgba(134, 179, 255, 0.16)) !important;
+  border-color: #3a3a3a !important;
+  background: #111111 !important;
 }
 
 .alisa-hero-mark {
-  position: relative;
+  display: none !important;
 }
 
-.alisa-hero-mark::after {
-  content: '✦';
-  position: absolute;
-  right: -9px;
-  top: -12px;
-  color: var(--alisa-pink);
-  font-size: 13px;
-  text-shadow: 0 0 16px rgba(239, 143, 189, 0.75);
+.terminal-message {
+  max-width: min(780px, 94%);
+  color: var(--alisa-text);
 }
 
-.alisa-model-trigger {
-  background: linear-gradient(115deg, rgba(239, 143, 189, 0.16), rgba(134, 179, 255, 0.16)) !important;
-  box-shadow: inset 0 0 0 1px rgba(194, 201, 235, 0.12);
+.terminal-message-head {
+  color: #666;
+  min-height: 1rem;
 }
 
-.alisa-model-menu {
-  border-color: rgba(178, 193, 232, 0.26) !important;
-  background: rgba(28, 32, 43, 0.96) !important;
-  backdrop-filter: blur(18px) saturate(135%);
-  -webkit-backdrop-filter: blur(18px) saturate(135%);
+.terminal-message-mark {
+  display: inline-block;
+  width: 1rem;
+  color: var(--alisa-blue);
+}
+
+.terminal-user .terminal-message-mark {
+  color: #bdbdbd;
+}
+
+.terminal-message-body {
+  padding-left: 1.5rem;
+}
+
+.terminal-user .terminal-message-body {
+  border-left: 1px solid #2a2a2a;
+  color: #d8d8d8;
+}
+
+.terminal-status {
+  display: inline-flex;
+  width: 1rem;
+  flex: 0 0 1rem;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+}
+
+@keyframes alisa-spin {
+  to { transform: rotate(360deg); }
+}
+
+.alisa-spinner {
+  animation: alisa-spin 780ms linear infinite;
+  transform-origin: center;
+  will-change: transform;
+}
+
+.terminal-running {
+  color: var(--alisa-yellow);
+}
+
+.terminal-success {
+  color: var(--alisa-green);
+}
+
+.terminal-error {
+  color: var(--alisa-red);
+}
+
+.tool-event {
+  color: #888;
+}
+
+.tool-event-trigger {
+  border: 0;
+  background: transparent;
+}
+
+.tool-output {
+  margin-left: 0.5rem;
+  padding-top: 0.15rem;
+  padding-bottom: 0.35rem;
+}
+
+.terminal-working {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding-left: 1.5rem;
+}
+
+.terminal-empty-line {
+  border-left: 1px solid #222;
+  padding-left: 1rem;
+}
+
+.terminal-command-hint {
+  border: 0;
+  background: transparent;
+  padding: 0.2rem 0;
+}
+
+.terminal-composer:focus-within {
+  border-color: #444 !important;
+}
+
+.terminal-jump,
+.terminal-autocomplete,
+.command-palette {
+  border-radius: 2px !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.terminal-autocomplete,
+.command-palette {
+  background: #080808 !important;
+}
+
+.terminal-approval {
+  color: #999;
+}
+
+.alisa-model-control {
+  border-radius: 2px !important;
+  background: #080808 !important;
+  border-color: #222 !important;
+}
+
+.alisa-model-control:focus-within {
+  border-color: #444 !important;
+}
+
+.model-menu {
+  border-radius: 2px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.55);
+}
+
+.model-menu button {
+  border-radius: 1px;
+}
+
+.model-menu button:focus-visible {
+  outline: 1px solid #6da8ff;
+  outline-offset: -1px;
+}
+
+.command-palette-backdrop {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Keep elevated surfaces square and quiet even where the layout still uses
+   utility classes for spacing and responsive behavior. */
+.alisa-shell .rounded-2xl,
+.alisa-shell .rounded-xl {
+  border-radius: 3px;
+}
+
+.alisa-shell .shadow-2xl,
+.alisa-shell .shadow-xl,
+.alisa-shell .shadow-md {
+  box-shadow: none !important;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .alisa-topbar-new:hover,
+  .alisa-boot-inner,
+  .alisa-boot-exiting,
+  .alisa-boot-status i,
+  .workspace-transition,
+  .workspace-transition-exit,
+  .workspace-transition-inner,
+  .workspace-transition-dot,
+  .workspace-transition-progress span,
+  .alisa-surface-enter,
+  .alisa-editor-overlay,
+  .alisa-modal-backdrop,
+  .command-palette-backdrop,
+  .alisa-editor-window,
+  .alisa-settings-dialog,
+  .alisa-palette-enter,
+  .project-menu-enter,
+  .alisa-toast,
+  .yurachi-companion,
+  .yurachi-companion > img,
+  .yurachi-companion-mini img {
+    animation: none;
+  }
+
+  .alisa-boot {
+    opacity: 0;
+  }
+
   .alisa-primary-action:hover,
   .alisa-suggestion-card:hover {
     transform: none;

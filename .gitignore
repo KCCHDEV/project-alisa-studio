@@ -36,6 +36,7 @@ builder-debug.yml
 
 # Local runtime state and credentials
 /.ichigo-config.json
+/.alisa-config.json*
 /config.json
 .ichigo-sessions/
 .alisa-sessions/

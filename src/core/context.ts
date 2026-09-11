@@ -5,6 +5,15 @@ export interface ActiveSkill {
   content?: string;
 }
 
+/** A deliberately conservative estimate used for the context meter. */
+export function estimateMessageTokens(messages: Message[]): number {
+  const serialized = messages.reduce((total, message) => {
+    const toolCalls = message.tool_calls ? JSON.stringify(message.tool_calls) : '';
+    return total + (message.content?.length || 0) + toolCalls.length + 24;
+  }, 0);
+  return Math.max(0, Math.ceil(serialized / 4));
+}
+
 export class ContextManager {
   private systemPrompt: string;
   private maxContextTokens: number;

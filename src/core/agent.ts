@@ -1,22 +1,27 @@
 import { discoverSkills } from './skills';
 import { ToolRegistry } from '../tools/registry.ts';
 import { LLMClient } from '../llm/client.ts';
-import { ContextManager, type ActiveSkill } from './context.ts';
+import { ContextManager, estimateMessageTokens, type ActiveSkill } from './context.ts';
 import { ContextCompactor } from './compactor.ts';
-import type { Message, AgentEvent, AgentStatus, ToolCall } from './types.ts';
+import { loadProjectInstructions } from './instructions.ts';
+import type { Goal, Message, AgentEvent, AgentMode, AgentStatus, ToolCall } from './types.ts';
 
 export interface AgentOptions {
   cwd: string;
   llm: LLMClient;
   toolRegistry?: ToolRegistry;
   maxIterations?: number;
-  mode?: 'ask' | 'code';
+  mode?: AgentMode;
+  sessionId?: string;
+  goal?: Goal;
+  contextWindow?: number;
+  onGoalUpdate?: (goal: Goal | undefined) => void;
   requestApproval?: (action: string, details: Record<string, unknown>, signal: AbortSignal) => Promise<boolean>;
   onEvent?: (event: AgentEvent) => void;
 }
 
 export class Agent {
-  private mode: 'ask' | 'code';
+  private mode: AgentMode;
   private requestApproval?: AgentOptions['requestApproval'];
   private cwd: string;
   private llm: LLMClient;
@@ -25,6 +30,11 @@ export class Agent {
   private compactor: ContextCompactor;
   private maxIterations: number;
   private onEvent?: (event: AgentEvent) => void;
+  private sessionId: string;
+  private goal?: Goal;
+  private contextWindow: number;
+  private onGoalUpdate?: AgentOptions['onGoalUpdate'];
+  private lastResponseModel = '';
   private isAborted = false;
   private currentAbortController: AbortController | null = null;
   private running = false;
@@ -40,6 +50,10 @@ export class Agent {
     this.compactor = new ContextCompactor();
     this.maxIterations = options.maxIterations || 25;
     this.onEvent = options.onEvent;
+    this.sessionId = options.sessionId || 'current';
+    this.goal = options.goal;
+    this.contextWindow = Math.max(8_000, Math.round(options.contextWindow || 128_000));
+    this.onGoalUpdate = options.onGoalUpdate;
   }
 
   setStatus(status: AgentStatus, detail?: string) {
@@ -63,6 +77,11 @@ export class Agent {
 
   emit(event: AgentEvent) {
     this.onEvent?.(event);
+  }
+
+  private getModelName() {
+    const client = this.llm as LLMClient & { getConfig?: () => { model?: string } };
+    try { return client.getConfig?.().model || 'unknown'; } catch { return 'unknown'; }
   }
 
   abort() {
@@ -110,11 +129,14 @@ export class Agent {
 
       const preparedMessages = this.contextManager.prepareMessages(
         compResult.compacted,
-        `Directory: ${this.cwd}\nPlatform: ${process.platform}. File tools are workspace-scoped. Terminal runs with the OS user permissions.`,
+        this.getWorkspaceContext(),
         this.loadActiveSkills(skillNames),
       );
-      const readOnlyTools = new Set(['read_file', 'list_directory', 'search_files', 'manage_skill']);
-      const openAITools = this.tools.toOpenAITools().filter(t => this.mode !== 'ask' || readOnlyTools.has(t.function.name));
+      const usedTokens = estimateMessageTokens(preparedMessages);
+      const percent = Math.min(100, Math.round((usedTokens / this.contextWindow) * 100));
+      this.emit({ type: 'context_usage', usage: { usedTokens, maxTokens: this.contextWindow, percent } });
+      const readOnlyTools = new Set(['read_file', 'list_directory', 'search_files', 'manage_skill', 'update_plan', 'update_goal']);
+      const openAITools = this.tools.toOpenAITools().filter(t => !this.isReadOnlyMode() || readOnlyTools.has(t.function.name));
 
       let currentResponseContent = '';
       let currentThought = '';
@@ -140,6 +162,10 @@ export class Agent {
         currentResponseContent = result.content;
         currentThought = result.thought;
         toolCalls = result.toolCalls;
+        const responseModel = result.model || this.getModelName();
+        // Keep the concrete route/model next to the transcript so historical
+        // responses remain attributable after the active model changes.
+        this.lastResponseModel = responseModel;
       } catch (err: any) {
         if (this.isAborted) break;
         const errMsg = err.message || 'LLM execution failed';
@@ -151,7 +177,23 @@ export class Agent {
           role: 'assistant',
           content: `[Error] เกิดข้อผิดพลาดในการเรียกโมเดล: ${errMsg}`,
           timestamp: Date.now(),
-          metadata: { error: true },
+          metadata: { error: true, model: this.getModelName() },
+        };
+        sessionMessages.push(errorAssistantMsg);
+        this.emit({ type: 'message_added', message: errorAssistantMsg });
+        break;
+      }
+
+      if (!toolCalls.length && !currentResponseContent.trim()) {
+        const emptyMessage = 'The provider returned an empty answer. Retry the task or choose another model.';
+        this.emit({ type: 'error', message: emptyMessage });
+        this.setStatus('error', emptyMessage);
+        const errorAssistantMsg: Message = {
+          id: `msg_err_${Date.now()}`,
+          role: 'assistant',
+          content: `[Error] ${emptyMessage}`,
+          timestamp: Date.now(),
+          metadata: { error: true, model: this.getModelName() },
         };
         sessionMessages.push(errorAssistantMsg);
         this.emit({ type: 'message_added', message: errorAssistantMsg });
@@ -167,6 +209,7 @@ export class Agent {
         timestamp: Date.now(),
         metadata: {
           thought: currentThought || undefined,
+          model: this.lastResponseModel || this.getModelName(),
         }
       };
 
@@ -211,7 +254,7 @@ export class Agent {
         } else {
           try {
             const validatedArgs = toolDef.parameters.parse(parsedArgs);
-            if (this.mode === 'ask' && !readOnlyTools.has(toolName)) throw new Error('Ask mode allows reading only');
+            if (this.isReadOnlyMode() && !readOnlyTools.has(toolName)) throw new Error(`${this.mode[0].toUpperCase()}${this.mode.slice(1)} mode allows reading and planning only`);
             if (toolDef.requiresApproval) {
               this.setStatus('waiting_approval', `Approve ${toolName} to continue`);
               const approved = await this.requestApproval?.(toolName, parsedArgs, this.currentAbortController.signal);
@@ -220,10 +263,16 @@ export class Agent {
             }
             const execResult = await toolDef.execute(validatedArgs, {
               cwd: this.cwd,
-              sessionId: 'current',
+              sessionId: this.sessionId,
               env: {},
               signal: this.currentAbortController.signal,
               emitEvent: (ev) => this.emit(ev),
+              goal: this.goal,
+              updateGoal: (nextGoal) => {
+                this.goal = nextGoal;
+                this.onGoalUpdate?.(nextGoal);
+                this.emit({ type: 'goal_update', goal: nextGoal });
+              },
             });
             if (execResult && typeof execResult === 'object' && (('exitCode' in execResult && execResult.exitCode !== 0) || execResult.success === false)) isToolError = true;
             toolOutputStr = typeof execResult === 'string' ? execResult : JSON.stringify(execResult, null, 2);
@@ -266,5 +315,32 @@ export class Agent {
       this.running = false;
       this.currentAbortController = null;
     }
+  }
+
+  private isReadOnlyMode() {
+    return this.mode === 'ask' || this.mode === 'plan';
+  }
+
+  private getWorkspaceContext() {
+    const instructionText = loadProjectInstructions(this.cwd);
+    const modeText = this.mode === 'ask'
+      ? 'Ask mode: inspect and explain only. Do not modify files or run shell commands.'
+      : this.mode === 'plan'
+        ? 'Plan mode: inspect the workspace and maintain a visible checklist with update_plan. Do not modify files or run shell commands.'
+        : this.mode === 'auto'
+          ? 'Auto mode: carry the task through to verification. Use the visible checklist for multi-step work and ask approval for shell commands.'
+          : 'Code mode: inspect before editing, use the visible checklist for multi-step work, then verify the result.';
+    const goalText = this.goal
+      ? `## Active Goal\nTitle: ${this.goal.title}\nStatus: ${this.goal.status}\nProgress: ${this.goal.progress}%${this.goal.description ? `\nDescription: ${this.goal.description}` : ''}`
+      : '## Active Goal\nNo persistent goal is set for this session.';
+    return [
+      `Directory: ${this.cwd}`,
+      `Platform: ${process.platform}`,
+      'File tools are workspace-scoped. Terminal runs with the OS user permissions.',
+      'For multi-step work, keep the persistent goal current with update_goal and the visible checklist current with update_plan.',
+      modeText,
+      goalText,
+      instructionText ? `\n## Project Instructions\n${instructionText}` : '',
+    ].filter(Boolean).join('\n');
   }
 }

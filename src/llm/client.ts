@@ -46,7 +46,7 @@ export class LLMClient {
     tools: Array<{ type: 'function'; function: any }>,
     callbacks: StreamCallbacks,
     signal?: AbortSignal
-  ): Promise<{ content: string; thought: string; toolCalls: ToolCall[]; finishReason: string }> {
+  ): Promise<{ content: string; thought: string; toolCalls: ToolCall[]; finishReason: string; model: string }> {
     const formattedMessages = messages.map(m => {
       const msg: any = {
         role: m.role,
@@ -76,10 +76,11 @@ export class LLMClient {
     const endpoint = `${this.config.baseURL}/chat/completions`;
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${this.config.apiKey}`,
+      'Accept': 'text/event-stream',
       'HTTP-Referer': 'https://ichigo.agent',
       'X-Title': 'Ichigo Agent',
     };
+    if (this.config.apiKey) headers.Authorization = `Bearer ${this.config.apiKey}`;
 
     const response = await fetch(endpoint, {
       method: 'POST',
@@ -108,6 +109,7 @@ export class LLMClient {
     let fullThought = '';
     let toolCallsMap = new Map<number, { id: string; name: string; args: string }>();
     let finishReason = '';
+    let resolvedModel = this.config.model;
     let completed = false;
 
     const consume = (line: string) => {
@@ -115,8 +117,14 @@ export class LLMClient {
       if (!trimmed.startsWith('data:')) return;
       const payload = trimmed.slice(5).trim();
       if (payload === '[DONE]') { completed = true; return; }
-      const json = JSON.parse(payload);
+      let json: any;
+      try {
+        json = JSON.parse(payload);
+      } catch {
+        throw new Error('Provider returned malformed streaming data. Please retry or check the gateway response.');
+      }
       if (json.error) throw new Error(json.error.message || 'Provider stream failed');
+      if (typeof json.model === 'string' && json.model.trim()) resolvedModel = json.model.trim();
       const choice = json.choices?.[0];
       if (!choice) return;
       if (choice.finish_reason) finishReason = choice.finish_reason;
@@ -172,6 +180,7 @@ export class LLMClient {
       thought: fullThought,
       toolCalls: finalToolCalls,
       finishReason,
+      model: resolvedModel,
     };
   }
 }

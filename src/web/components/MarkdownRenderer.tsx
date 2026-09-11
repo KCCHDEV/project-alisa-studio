@@ -20,8 +20,8 @@ const CodeBlock: React.FC<{ language: string; code: string }> = ({ language, cod
   if (isDiff) {
     const diffLines = code.split('\n');
     return (
-      <div className="my-3 overflow-hidden rounded-xl border border-[#2b333f] bg-[#0d1015] shadow-md">
-        <div className="flex items-center justify-between border-b border-[#252c38] bg-[#131720] px-3.5 py-1.5 text-xs text-[#8da4c6]">
+      <div className="code-block my-3 overflow-hidden border border-[#1a1a1a] bg-[#080808]">
+        <div className="flex items-center justify-between border-b border-[#1a1a1a] bg-transparent px-3.5 py-1.5 text-xs text-[#666]">
           <span className="flex items-center gap-1.5 font-mono text-[11px] font-medium text-[#38bdf8]">
             <FileCode2 className="h-3.5 w-3.5" /> diff
           </span>
@@ -40,9 +40,9 @@ const CodeBlock: React.FC<{ language: string; code: string }> = ({ language, cod
             const isDel = line.startsWith('-');
             const isHunk = line.startsWith('@@');
             const cls = isAdd
-              ? 'diff-add block rounded px-1 bg-emerald-950/40 text-emerald-300'
+              ? 'diff-add block border-l border-emerald-400/60 px-1 text-emerald-300'
               : isDel
-              ? 'diff-remove block rounded px-1 bg-rose-950/40 text-rose-300'
+              ? 'diff-remove block border-l border-rose-400/60 px-1 text-rose-300'
               : isHunk
               ? 'text-[#8da4c6] block font-semibold'
               : 'block';
@@ -58,8 +58,8 @@ const CodeBlock: React.FC<{ language: string; code: string }> = ({ language, cod
   }
 
   return (
-    <div className="my-3 overflow-hidden rounded-xl border border-[#2b333f] bg-[#0d1015] shadow-md">
-      <div className="flex items-center justify-between border-b border-[#252c38] bg-[#131720] px-3.5 py-1.5 text-xs text-[#8da4c6]">
+    <div className="code-block my-3 overflow-hidden border border-[#1a1a1a] bg-[#080808]">
+      <div className="flex items-center justify-between border-b border-[#1a1a1a] bg-transparent px-3.5 py-1.5 text-xs text-[#666]">
         <span className="flex items-center gap-1.5 font-mono text-[11px] font-medium text-[#7dd3fc]">
           <Terminal className="h-3.5 w-3.5" />
           {language || 'code'}
@@ -91,7 +91,7 @@ function formatInlineText(text: string): React.ReactNode[] {
       return (
         <code
           key={i}
-          className="rounded-md bg-[#18202d] px-1.5 py-0.5 font-mono text-[12px] font-medium text-[#38bdf8] border border-[#2a374a]"
+          className="font-mono text-[12px] font-medium text-[#9bc2ff]"
         >
           {part.slice(1, -1)}
         </code>
@@ -188,7 +188,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, cla
                 return (
                   <blockquote
                     key={lineIdx}
-                    className="border-l-2 border-[#38bdf8] bg-[#121722]/60 px-3 py-1.5 text-xs italic text-[#94a3b8] rounded-r-lg"
+                    className="border-l border-[#31527d] px-3 py-1.5 text-xs italic text-[#777]"
                   >
                     {formatInlineText(trimmed.slice(2))}
                   </blockquote>
@@ -199,7 +199,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, cla
               if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
                 return (
                   <div key={lineIdx} className="flex items-start gap-2 pl-2">
-                    <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[#38bdf8]" />
+                    <span className="mt-1 text-[#6da8ff]">›</span>
                     <span className="flex-1">{formatInlineText(trimmed.slice(2))}</span>
                   </div>
                 );

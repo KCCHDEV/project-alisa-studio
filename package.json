@@ -1,17 +1,14 @@
 {
   "name": "project-alisa",
-  "version": "1.0.0",
-  "description": "Project Alisa Studio \u0e42\u20ac\u201d Personal AI Coding & Automation Harness",
+  "version": "2.0.0",
+  "description": "Project Alisa Studio — Personal AI Coding & Automation Harness",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "dev:all": "concurrently --kill-others-on-fail \"bun run src/server/index.ts\" \"bun run dev\"",
+    "app": "tauri dev",
+    "dev": "bun run app",
     "build:ui": "vite build",
     "build": "bun run typecheck && bun run build:ui",
-    "preview": "vite preview",
-    "server": "bun run src/server/index.ts",
-    "cli": "bun run src/cli/index.ts",
-    "start": "bun run dev:all",
+    "start": "bun run app",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
@@ -38,11 +35,9 @@
     "@types/ws": "^8.5.14",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
-    "concurrently": "^10.0.5",
     "postcss": "^8.5.2",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.3",
-    "vite": "^6.1.0",
-    "wait-on": "^9.1.0"
+    "vite": "^6.1.0"
   }
 }

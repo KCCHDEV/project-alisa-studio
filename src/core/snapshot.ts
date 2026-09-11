@@ -19,9 +19,21 @@ export class FileTransactionManager {
     this.snapshotDir = resolveWorkspacePath(workspaceDir, '.ichigo-snapshots');
     fs.mkdirSync(this.snapshotDir, { recursive: true });
     for (const file of fs.readdirSync(this.snapshotDir).filter(f => f.endsWith('.bak'))) {
-      const snapshot = JSON.parse(fs.readFileSync(path.join(this.snapshotDir, file), 'utf8'));
-      // Legacy backups lack the post-write hash and cannot safely auto-restore.
-      if (typeof snapshot.expectedHash === 'string' && snapshot.id === file.slice(0, -4)) this.history.push(snapshot);
+      try {
+        const snapshot = JSON.parse(fs.readFileSync(path.join(this.snapshotDir, file), 'utf8')) as Partial<FileSnapshot>;
+        const validOriginal = snapshot.originalContent === null || typeof snapshot.originalContent === 'string';
+        const validHash = typeof snapshot.expectedHash === 'string' && /^[a-f0-9]{64}$/i.test(snapshot.expectedHash);
+        const validTimestamp = typeof snapshot.timestamp === 'number' && Number.isFinite(snapshot.timestamp);
+        const validPath = typeof snapshot.filePath === 'string' && (() => {
+          try { resolveWorkspacePath(this.workspaceDir, snapshot.filePath!); return true; } catch { return false; }
+        })();
+        // Legacy backups lack the post-write hash and cannot safely auto-restore.
+        if (snapshot.id === file.slice(0, -4) && validOriginal && validHash && validTimestamp && validPath) {
+          this.history.push(snapshot as FileSnapshot);
+        }
+      } catch {
+        // A corrupt or partial backup must not prevent the workspace from opening.
+      }
     }
     this.history.sort((a, b) => a.timestamp - b.timestamp);
   }
@@ -33,9 +45,15 @@ export class FileTransactionManager {
       expectedHash: hash(content), timestamp: Math.max(Date.now(), (this.history.at(-1)?.timestamp || 0) + 1),
     };
     // Fail closed: never write if the original cannot be read or its backup saved.
-    fs.writeFileSync(path.join(this.snapshotDir, `${snapshot.id}.bak`), JSON.stringify(snapshot), { mode: 0o600 });
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, content, 'utf8');
+    const backupPath = path.join(this.snapshotDir, `${snapshot.id}.bak`);
+    try {
+      fs.writeFileSync(backupPath, JSON.stringify(snapshot), { mode: 0o600 });
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, content, 'utf8');
+    } catch (error) {
+      try { fs.unlinkSync(backupPath); } catch { /* Keep the original write error. */ }
+      throw error;
+    }
     this.history.push(snapshot);
   }
   async rollbackLatest(): Promise<{ success: boolean; filePath?: string; message: string }> {

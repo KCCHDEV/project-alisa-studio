@@ -1,6 +1,6 @@
-> **Current runtime: Tauri + Bun.** The repository is migrating from Electron; the older overview below describes the previous release. For current commands, working features, isolation limits, and local plugins, see [Restored workflow](docs/RESTORATION.md).
+> **Current runtime: Tauri + Bun V2.** For project/chat workflow, editor behavior, isolation limits, and local plugins, see [Project-first workflow](docs/RESTORATION.md).
 >
-> Start: `bun install --frozen-lockfile` → `bun run tauri:dev`. Web: `bun run dev:all` at `http://127.0.0.1:3050`. Verify: `bun test` and `bun run build`. Package: `bun run dist`.
+> Start: `bun install --frozen-lockfile` → `bun run app`. This repository ships a Tauri desktop app only; Vite is an internal Tauri webview build step. Verify: `bun test` and `bun run build`. Package: `bun run dist`.
 
 <div align="center">
 
@@ -16,10 +16,12 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)
 ![Bun](https://img.shields.io/badge/Bun-runtime-fbf0df?logo=bun&logoColor=111)
 ![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=111)
-![Electron](https://img.shields.io/badge/Electron-desktop-47848F?logo=electron&logoColor=white)
+![Tauri](https://img.shields.io/badge/Tauri-desktop-24C8DB?logo=tauri&logoColor=111)
 ![OmniRoute](https://img.shields.io/badge/Gateway-OmniRoute-EF8FBD)
 
 **AI / Code / Create / Automate — together.**
+
+[Latest V2 desktop release](https://github.com/KCCHDEV/project-alisa-studio/releases/latest)
 
 </div>
 
@@ -43,13 +45,20 @@ Repository นี้มีเฉพาะ source code ของแอป ไม�
 | --- | --- | --- |
 | 🧠 | **Agent Loop** | ทำงานแบบหลายรอบ: วิเคราะห์ → เรียก tool → อ่านผล → ทำงานต่อ |
 | 💬 | **Streaming Chat** | แสดงข้อความ, reasoning field ที่ provider ส่งมา, tool activity และ status แบบ realtime |
+| 🧾 | **Model Attribution** | ทุกคำตอบใหม่ระบุ `via <resolved model>` ว่าตอบจาก model/route ใด |
 | 📁 | **Project Workspace** | เลือกโฟลเดอร์โปรเจกต์ แล้วอ่าน/ค้นหา/แก้ไฟล์ภายใน workspace |
-| 🛠️ | **Local Tools** | File read/write/patch/search และ terminal command พร้อม timeout |
+| 🛠️ | **Local Tools** | File read/write/patch/search, persistent goal และ terminal command พร้อม timeout |
+| 🖥️ | **Integrated Terminal** | local shell แบบ persistent และ remote SSH session ในแอปเดียว โดยไม่บันทึก password หรือ private key |
+| 🐝 | **Agent Swarm** | staged Explorer → Planner → Builder → Reviewer พร้อมสถานะ worker และเวลารัน |
+| 📊 | **Context Window** | แสดง token estimate, max context ของ model และ automatic compaction |
 | ↩️ | **Snapshots / Rollback** | เก็บ snapshot ก่อน file write/patch ที่รองรับ เพื่อย้อนการแก้ไขล่าสุด |
 | 🧩 | **Skills** | โหลด Hermes-style `SKILL.md` และ workspace skills |
+| 🔌 | **Preinstalled MCP + Computer Use** | bundled skills พร้อมตรวจ MCP config และ desktop input bridge แบบ read-only; ไม่รัน external process เอง |
 | 🕘 | **Project History** | เก็บบทสนทนาตาม workspace ทำให้แต่ละโปรเจกต์มี history ของตัวเอง |
 | ⚡ | **OmniRoute Ready** | ใช้ base URL + API key + model route เช่น `auto/best-coding` |
-| 🖥️ | **Desktop App** | Electron สำหรับ Windows/macOS พร้อมระบบ in-app update ผ่าน GitHub Releases |
+| 🎨 | **VS Code Editor** | multi-tab editor พร้อม syntax colors, line numbers, active line และ Ctrl/Cmd+S |
+| 🌸 | **Yurachi Companion Poses** | ภาพ chibi หลายท่าตามสถานะงาน พร้อมซ่อน/แสดงด้วยปุ่ม, `/character` และจำค่าบนเครื่อง |
+| 🖥️ | **Desktop App** | Tauri สำหรับ desktop พร้อม local Bun backend และ workspace isolation |
 | 🎀 | **Cute Developer Identity** | UI โทนมืดสำหรับเขียนโค้ด ผสม pink / blue / violet แบบ Yurachi-inspired |
 
 ---
@@ -152,9 +161,14 @@ Agent ใช้ bounded ReAct-style loop โดยแต่ละ cycle จะ�
 - agent statuses เช่น thinking / acting / done / error;
 - file snapshots สำหรับ supported writes;
 - project-scoped chat sessions;
-- built-in + Hermes-style skills.
+- persistent session goals พร้อม status/progress/steps และ `update_goal` tool;
+- staged agent swarm แบบ Explorer → Planner → Builder → Reviewer (ใช้ workspace ร่วมกันแบบ sequential เพื่อเลี่ยง write conflicts);
+- context window estimate พร้อม model context metadata เมื่อ gateway ประกาศ;
+- model attribution ใน assistant transcript ว่า response มาจาก route/model ใด;
+- built-in + Hermes-style skills รวม `mcp` และ `computer-use` ที่ติดมากับ V2;
+- startup/project/panel transitions แบบสั้นและ compositor-friendly เพื่อไม่บล็อก workspace.
 
-> `subagent-orchestration` ตอนนี้เป็น **skill/instruction layer** ยังไม่ใช่ worker agent แยก process จริง ๆ
+> Agent swarm ใน V2 เป็น worker agent แยกตาม role ภายใน backend เดียวกันและรันเป็นลำดับเพื่อความปลอดภัยของการแก้ไฟล์; parallel execution ยังไม่เปิดเป็นค่าเริ่มต้น.
 
 ---
 
@@ -163,8 +177,8 @@ Agent ใช้ bounded ReAct-style loop โดยแต่ละ cycle จะ�
 - **Sessions** — งานและบทสนทนาของโปรเจกต์
 - **Files** — file tree + editor
 - **Chat** — streaming conversation + agent activity
-- **Terminal** — command execution/output
-- **Skills** — เลือก skill ที่ใช้กับ agent
+- **Terminal** — local persistent shell + remote SSH session พร้อม live output
+- **Skills** — เลือก skill ที่ใช้กับ agent; `mcp` และ `computer-use` พร้อมใช้ตั้งแต่เปิดแอป
 - **Model Picker** — เปลี่ยน model/route เร็ว ๆ
 - **Settings** — API key, base URL, model, workspace, updater
 
@@ -180,6 +194,24 @@ Command-style actions ที่มีใน UI เช่น:
 /build      build desktop app
 /clear      ล้าง terminal logs
 ```
+
+Integrated terminal ใช้ `Ctrl/Cmd + grave` หรือปุ่ม Terminal ด้านบน แอปเปิด local shell ที่ active workspace เป็นค่าเริ่มต้น ส่วน SSH ใช้ `ssh` ที่ติดตั้งในเครื่องและรับ password/host-key prompt ภายใน terminal โดยไม่เขียน credential ลง config. Session จะปิดเมื่อ backend disconnect หรือไม่มี activity ตาม timeout เพื่อไม่ทิ้ง process ค้าง.
+
+V2 bundle มี `mcp` และ `computer-use` เป็น built-in instruction skills ตั้งแต่ติดตั้ง แอปตรวจไฟล์ MCP ที่พบบนเครื่องและ input bridge ที่มีอยู่ใน Settings เท่านั้น; การ launch MCP server หรือ desktop action ต้องถูกเรียกผ่านระบบที่ผู้ใช้อนุมัติ ไม่รันเบื้องหลังเอง.
+
+### Yurachi companion poses
+
+ภาพ companion เป็น optional layer สำหรับหน้า session ว่าง และจะแสดงเป็นตัวบอกสถานะขนาดเล็กระหว่าง agent ทำงาน เพื่อไม่แย่งพื้นที่ coding:
+
+| Pose | สถานะที่ใช้ |
+| --- | --- |
+| `coding` | session ใหม่ / idle |
+| `thinking` | model กำลังคิดหรือ self-correcting |
+| `terminal` | agent กำลังใช้ tool, terminal หรือรอ permission |
+| `review` | มีไฟล์ที่เปลี่ยนแปลงให้ตรวจ |
+| `success` | task ล่าสุดเสร็จสมบูรณ์ |
+
+กดปุ่ม ✨ ด้านบนหรือใช้ `/character` เพื่อซ่อน/แสดง ระบบจำค่าบนเครื่องด้วย local webview storage.
 
 ---
 
@@ -201,37 +233,21 @@ cd project-alisa-studio
 bun install --frozen-lockfile
 ```
 
-### Desktop
+### Desktop app (Tauri V2)
 
 ```bash
-bun run start:electron
+bun run app
+# equivalent: bun run tauri:dev
 ```
 
-หรือ:
+หรือ build installer:
 
 ```bash
 bun run build
-bunx --no-install electron .
+bun run dist
 ```
 
-### Web development
-
-Terminal 1:
-
-```bash
-bun run server
-```
-
-Terminal 2:
-
-```bash
-bun run dev
-```
-
-```text
-Frontend : http://localhost:3000
-Backend  : http://localhost:3001
-```
+There is no standalone web mode. The Vite dev server and local Bun backend are started automatically by Tauri for the desktop webview and are not user-facing endpoints.
 
 ---
 
@@ -251,11 +267,13 @@ Startup defaults รองรับ environment variables:
 ```bash
 OPENAI_API_KEY=...
 OPENAI_BASE_URL=http://127.0.0.1:10009/v1
+OMNIROUTE_API_KEY=...
+OMNIROUTE_BASE_URL=http://127.0.0.1:10009/v1
 ```
 
 รองรับ `OPENROUTER_API_KEY` เช่นกัน และ local Hermes config อาจถูกใช้เป็น startup fallback ส่วน settings ที่ save ในแอปจะ override ค่าเริ่มต้น
 
-> ตอนนี้ API key ใน desktop config ยังเก็บเป็น plaintext บนเครื่อง ควรเก็บไฟล์ config เป็น private และห้าม commit
+> ตอนนี้ API key ใน desktop config ยังเก็บเป็น plaintext บนเครื่อง ควรเก็บไฟล์ config เป็น private และห้าม commit การตั้งค่าจะถูกเขียนแบบ atomic และมี backup ส่วนตัว 3 ชุดใน app-data (`.alisa-config.json.bak1` ถึง `.bak3`) เพื่อกู้คืนอัตโนมัติเมื่อไฟล์หลักเสียหรือหาย
 
 ---
 
@@ -263,15 +281,16 @@ OPENAI_BASE_URL=http://127.0.0.1:10009/v1
 
 | Command | Output |
 | --- | --- |
-| `bun run build` | Web + server/Electron bundles |
-| `bun run dist:win` | Windows NSIS + portable |
-| `bun run dist:nsis` | Windows installer |
-| `bun run dist:mac` | macOS DMG + ZIP |
-| `bun run dist:dir` | unpacked Windows app |
+| `bun run build` | TypeScript check + Tauri frontend assets |
+| `bun run build:server` | Compiled Bun backend resource |
+| `bun run tauri:build` | Tauri installer for the current platform |
+| `bun run dist` | Alias for the Tauri package build |
 
-Output อยู่ใน `release/`
+Output อยู่ใน `src-tauri/target/release/bundle/`
 
-Updater ของ installed app ใช้ GitHub Releases และ release tags รูปแบบ `v*`
+Automatic in-app updates are not configured in this build; use the published release artifacts manually.
+
+Release ล่าสุดอยู่ที่ [GitHub Releases](https://github.com/KCCHDEV/project-alisa-studio/releases) และ Linux package จะใช้ไฟล์ `.deb` ที่สร้างจาก Tauri V2.
 
 ---
 
@@ -289,7 +308,8 @@ Push main
 Tag v*
    ├─ Verify build
    ├─ Publish Windows release
-   └─ Publish macOS release
+   ├─ Publish macOS release
+   └─ Publish Linux `.deb` when available
 ```
 
 CI ใช้ permission แบบ read-only เป็นค่าเริ่มต้น และให้ `contents: write` เฉพาะ release jobs
@@ -300,13 +320,13 @@ CI ใช้ permission แบบ read-only เป็นค่าเริ่ม
 
 ```text
 src/
-├─ web/       React studio UI
+├─ web/       Tauri webview UI + VS Code-style editor (internal only)
 ├─ server/    local HTTP + WebSocket backend
 ├─ core/      agent / context / compaction / security / snapshots
 ├─ llm/       OpenAI-compatible streaming client
-├─ tools/     file / terminal / search / skill tools
-├─ electron/  desktop lifecycle / IPC / updater
-└─ cli/       terminal chat interface
+└─ tools/     file / terminal / search / skill tools
+
+src-tauri/    Tauri desktop lifecycle / native shell
 
 docs/         product + integration + visual documentation
 public/       app assets
@@ -315,24 +335,25 @@ public/       app assets
 
 ---
 
-## 🌷 Roadmap
+## 🌷 V2 status and roadmap
 
 ทิศทางหลักคือทำให้ Alisa เป็น **cute but serious desktop coding agent**:
 
-- first-class OmniRoute profile;
-- Test Connection;
-- `/models` discovery พร้อม fallback;
-- grouped model picker: Coding / Reasoning / Fast / Vision / Chat;
-- exact provider-route recovery;
-- Ask / Plan / Code / Auto modes;
-- task checklist แบบ coding agent;
-- richer tool activity cards;
-- file diff review;
-- approval policy สำหรับ sensitive commands;
-- retry/backoff และ fallback route;
-- usage / latency / model telemetry แบบ local;
-- Git/worktree awareness;
-- true subagents ในอนาคต.
+V2 ที่ใช้งานได้แล้ว:
+
+- first-class provider profiles, Test Connection และ `/models` discovery fallback;
+- Project + Chats workflow พร้อม rename / pin / archive / search;
+- Ask / Plan / Code / Auto modes และ durable task checklist;
+- streaming tool activity, approval card, diff/changes panel และ rollback;
+- VS Code-style multi-tab editor พร้อม explorer, line numbers, breadcrumbs และ Ctrl/Cmd+S;
+- integrated terminal แบบ persistent สำหรับ local shell และ SSH พร้อม output batching เพื่อลดอาการกระตุก;
+- workspace instruction loading จาก `AGENTS.md` และ session persistence ต่อโปรเจกต์.
+
+งานถัดไปที่ตั้งใจทำต่อ:
+
+- diagnostics, search/replace และ extension-like editor integrations;
+- Git worktree controls, commit/branch review และ local usage telemetry;
+- parallel read-only swarm workers ในอนาคต เมื่อ permission/context budget รองรับอย่างเสถียร.
 
 รายละเอียด engineering roadmap: **[docs/CODEX-OMNIROUTE.md](docs/CODEX-OMNIROUTE.md)**
 
@@ -342,8 +363,9 @@ public/       app assets
 
 Project Alisa Studio ตอนนี้เป็น **local development application** ไม่ใช่ hardened multi-user service
 
-- อย่า expose backend port `3001` ไปยัง network ที่ไม่ไว้ใจ;
-- terminal tools ใช้สิทธิ์ของ OS user ที่เปิดแอป;
+- อย่า expose backend port `3101` ไปยัง network ที่ไม่ไว้ใจ;
+- terminal tools และ integrated local shell ใช้สิทธิ์ของ OS user ที่เปิดแอป; SSH ใช้ host keys/config ของ `ssh` ในเครื่อง;
+- integrated terminal จำกัด local starting directory ให้อยู่ใน active workspace แต่ shell สามารถ `cd` ต่อไปตามสิทธิ์ของ OS ได้;
 - file endpoints ควรอยู่ภายใน active workspace;
 - rollback ไม่สามารถย้อนผลกระทบทุกอย่างจาก arbitrary terminal commands;
 - current security checks เป็น defensive helpers ไม่ใช่ complete sandbox;

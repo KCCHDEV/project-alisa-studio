@@ -23,9 +23,9 @@ export { getTxManager };
 
 // 1. Read File Tool
 export const ReadFileInputSchema = z.object({
-  path: z.string().describe('Relative or absolute file path to read'),
-  offset: z.number().optional().default(1).describe('Start line number (1-indexed)'),
-  limit: z.number().optional().default(2000).describe('Max lines to read'),
+  path: z.string().trim().min(1).max(4096).describe('Relative or absolute file path to read'),
+  offset: z.number().int().min(1).max(1_000_000).optional().default(1).describe('Start line number (1-indexed)'),
+  limit: z.number().int().min(1).max(5000).optional().default(2000).describe('Max lines to read'),
 });
 
 export const readFileTool: ToolDefinition<z.input<typeof ReadFileInputSchema>, { content: string; totalLines: number }> = {
@@ -58,8 +58,8 @@ export const readFileTool: ToolDefinition<z.input<typeof ReadFileInputSchema>, {
 
 // 2. Write File Tool
 export const WriteFileInputSchema = z.object({
-  path: z.string().describe('File path to create or overwrite'),
-  content: z.string().describe('Complete file content to write'),
+  path: z.string().trim().min(1).max(4096).describe('File path to create or overwrite'),
+  content: z.string().max(8_000_000).describe('Complete file content to write'),
 });
 
 export const writeFileTool: ToolDefinition<z.infer<typeof WriteFileInputSchema>, { success: boolean; bytesWritten: number; path: string }> = {
@@ -86,9 +86,9 @@ export const writeFileTool: ToolDefinition<z.infer<typeof WriteFileInputSchema>,
 
 // 3. Patch File Tool (Search & Replace with fuzzy fallback)
 export const PatchFileInputSchema = z.object({
-  path: z.string().describe('File path to patch'),
-  old_string: z.string().describe('Exact block of code to find'),
-  new_string: z.string().describe('Replacement block of code'),
+  path: z.string().trim().min(1).max(4096).describe('File path to patch'),
+  old_string: z.string().min(1).max(1_000_000).describe('Exact block of code to find'),
+  new_string: z.string().max(1_000_000).describe('Replacement block of code'),
   replace_all: z.boolean().optional().default(false).describe('Replace all occurrences (default false)'),
 });
 
@@ -125,9 +125,9 @@ export const patchFileTool: ToolDefinition<z.input<typeof PatchFileInputSchema>,
 
 // 4. List Directory Tool
 export const ListDirInputSchema = z.object({
-  path: z.string().optional().default('.').describe('Directory path to list'),
+  path: z.string().trim().min(1).max(4096).optional().default('.').describe('Directory path to list'),
   recursive: z.boolean().optional().default(false).describe('List files recursively'),
-  max_depth: z.number().optional().default(2).describe('Max recursion depth'),
+  max_depth: z.number().int().min(0).max(8).optional().default(2).describe('Max recursion depth'),
 });
 
 export const listDirTool: ToolDefinition<z.input<typeof ListDirInputSchema>, { entries: Array<{ name: string; isDirectory: boolean; size: number }> }> = {
@@ -140,20 +140,25 @@ export const listDirTool: ToolDefinition<z.input<typeof ListDirInputSchema>, { e
       throw new Error(`Directory not found: ${args.path}`);
     }
 
-    const items = fs.readdirSync(fullPath, { withFileTypes: true });
-    const entries = items.map(item => {
-      let size = 0;
-      try {
+    const entries: Array<{ name: string; isDirectory: boolean; size: number }> = [];
+    const maxEntries = 2000;
+    const visit = (directory: string, prefix: string, depth: number) => {
+      if (entries.length >= maxEntries) return;
+      let items: fs.Dirent[] = [];
+      try { items = fs.readdirSync(directory, { withFileTypes: true }); } catch { return; }
+      for (const item of items) {
+        if (entries.length >= maxEntries) break;
+        const itemPath = path.join(directory, item.name);
+        const name = prefix ? path.join(prefix, item.name) : item.name;
+        let size = 0;
         if (!item.isDirectory()) {
-          size = fs.statSync(path.join(fullPath, item.name)).size;
+          try { size = fs.statSync(itemPath).size; } catch { /* Keep inaccessible entries visible with size 0. */ }
         }
-      } catch {}
-      return {
-        name: item.name,
-        isDirectory: item.isDirectory(),
-        size,
-      };
-    });
+        entries.push({ name, isDirectory: item.isDirectory(), size });
+        if (args.recursive && item.isDirectory() && depth < (args.max_depth ?? 2)) visit(itemPath, name, depth + 1);
+      }
+    };
+    visit(fullPath, '', 0);
 
     return { entries };
   }

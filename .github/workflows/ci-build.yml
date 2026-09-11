@@ -58,3 +58,5 @@ jobs:
             packages/**/*.exe
             packages/**/*.msi
             packages/**/*.dmg
+            packages/**/*.deb
+            packages/**/*.AppImage

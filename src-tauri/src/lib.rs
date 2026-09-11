@@ -37,7 +37,7 @@ fn close_window(window: Window) {
 
 #[tauri::command]
 fn is_server_running() -> bool {
-    is_port_open(3001)
+    is_port_open(3101)
 }
 
 #[tauri::command]
@@ -75,8 +75,8 @@ pub fn run() {
 
             // Development uses beforeDevCommand; packaged builds own their backend.
             if !cfg!(debug_assertions) {
-                if is_port_open(3001) {
-                    return Err("Port 3001 is occupied. Close the other Alisa backend before starting.".into());
+                if is_port_open(3101) {
+                    return Err("Port 3101 is occupied. Close the other Alisa backend before starting.".into());
                 }
                 let resource_dir = app.path().resource_dir()?;
                 let data_dir = app.path().app_data_dir()?;

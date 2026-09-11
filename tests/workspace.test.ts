@@ -8,7 +8,7 @@ import { ContextCompactor } from '../src/core/compactor';
 import { ContextManager } from '../src/core/context';
 import { terminalTool } from '../src/tools/terminal';
 import { FileTransactionManager } from '../src/core/snapshot';
-import { patchFileTool } from '../src/tools/file-ops';
+import { listDirTool, patchFileTool, readFileTool } from '../src/tools/file-ops';
 
 test('workspace rejects traversal and junction escape, including newly created paths', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'alisa-path-'));
@@ -30,6 +30,17 @@ test('new chats preserve history, survive restart and are scoped to their projec
     store.save(first);
     const second = store.create('project-a');
     expect(second.messages).toEqual([]);
+    const renamed = store.update('project-a', second.id, { title: 'Pinned plan', pinned: true, mode: 'plan', plan: [{ id: 'step-1', title: 'Inspect', status: 'completed' }] });
+    expect(renamed.title).toBe('Pinned plan');
+    expect(renamed.pinned).toBe(true);
+    const goal = store.update('project-a', second.id, { goal: { id: 'goal-1', title: 'Ship editor', description: 'Make the editor usable', status: 'active', progress: 25, steps: [], createdAt: 10, updatedAt: 11 }, swarm: true });
+    expect(goal.goal?.title).toBe('Ship editor');
+    expect(goal.swarm).toBe(true);
+    expect(new SessionStore(root).get('project-a', second.id).goal?.progress).toBe(25);
+    expect(store.update('project-a', second.id, { goal: undefined }).goal).toBeUndefined();
+    expect(new SessionStore(root).search('project-a', 'pinned plan')[0].id).toBe(second.id);
+    new SessionStore(root).update('project-a', second.id, { archived: true });
+    expect(new SessionStore(root).list('project-a', { includeArchived: false }).some(session => session.id === second.id)).toBe(false);
     expect(new SessionStore(root).get('project-a', first.id).messages).toHaveLength(1);
     expect(() => store.get('project-b', first.id)).toThrow();
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
@@ -95,5 +106,19 @@ test('patch refuses ambiguous edits and preserves Windows line endings', async (
     await expect(patchFileTool.execute({ path: 'file.txt', old_string: 'same', new_string: 'new' }, context)).rejects.toThrow('Multiple matches');
     await patchFileTool.execute({ path: 'file.txt', old_string: 'same\nend', new_string: 'changed\nend' }, context);
     expect(fs.readFileSync(file, 'utf8')).toBe('same\r\nchanged\r\nend\r\n');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('corrupt snapshots are ignored and directory listing honors bounded recursion', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'alisa-tools-'));
+  try {
+    fs.mkdirSync(path.join(root, '.ichigo-snapshots'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.ichigo-snapshots', 'broken.bak'), '{not-json');
+    fs.mkdirSync(path.join(root, 'nested')); fs.writeFileSync(path.join(root, 'nested', 'file.ts'), 'export {}');
+    expect(new FileTransactionManager(root).getRevisionCount()).toBe(0);
+    const context = { cwd: root, sessionId: 'test', env: {}, emitEvent() {} };
+    const listed = await listDirTool.execute({ path: '.', recursive: true, max_depth: 1 }, context);
+    expect(listed.entries.some(entry => entry.name === path.join('nested', 'file.ts'))).toBe(true);
+    expect(() => readFileTool.parameters.parse({ path: 'nested/file.ts', offset: 0 })).toThrow();
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

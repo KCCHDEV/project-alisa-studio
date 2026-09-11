@@ -24,7 +24,6 @@ export interface DesktopAPI {
 declare global {
   interface Window {
     desktopAPI?: DesktopAPI;
-    electronAPI?: DesktopAPI;
     __TAURI_INTERNALS__?: unknown;
   }
 }

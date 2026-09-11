@@ -5,10 +5,10 @@ import * as path from 'path';
 import type { ToolDefinition } from '../core/types.ts';
 
 export const SearchFilesInputSchema = z.object({
-  query: z.string().describe('Search query or regex pattern'),
-  path: z.string().optional().default('.').describe('Directory to search in'),
-  file_glob: z.string().optional().describe('Filter files by extension (e.g. *.ts, *.json)'),
-  max_results: z.number().optional().default(50).describe('Maximum matches to return'),
+  query: z.string().min(1).max(1000).describe('Search query or regex pattern'),
+  path: z.string().trim().min(1).max(4096).optional().default('.').describe('Directory to search in'),
+  file_glob: z.string().trim().max(100).optional().describe('Filter files by extension (e.g. *.ts, *.json)'),
+  max_results: z.number().int().min(1).max(500).optional().default(50).describe('Maximum matches to return'),
 });
 
 export const searchFilesTool: ToolDefinition<z.input<typeof SearchFilesInputSchema>, { matches: Array<{ file: string; line: number; text: string }> }> = {
@@ -18,7 +18,7 @@ export const searchFilesTool: ToolDefinition<z.input<typeof SearchFilesInputSche
   execute: async (args, context) => {
     const rootDir = resolveWorkspacePath(context.cwd, args.path || '.');
     const matches: Array<{ file: string; line: number; text: string }> = [];
-    const maxResults = args.max_results || 50;
+    const maxResults = Math.min(args.max_results || 50, 500);
 
     let regex: RegExp;
     try {
@@ -55,6 +55,7 @@ export const searchFilesTool: ToolDefinition<z.input<typeof SearchFilesInputSche
           }
 
           try {
+            if (fs.statSync(full).size > 2_000_000) continue;
             const content = fs.readFileSync(full, 'utf-8');
             const lines = content.split(/\r?\n/);
             for (let i = 0; i < lines.length; i++) {

@@ -13,7 +13,7 @@ test('Provider switcher API: list, switch, add custom, test, and delete', async 
       const url = new URL(req.url);
       if (url.pathname.endsWith('/models')) {
         return new Response(JSON.stringify({
-          data: [{ id: 'mock-model-1' }, { id: 'mock-model-2' }]
+          data: [{ id: 'mock-model-1', context_length: 131072 }, { id: 'mock-model-2' }]
         }), { headers: { 'Content-Type': 'application/json' } });
       }
       return new Response('Not found', { status: 404 });
@@ -93,7 +93,24 @@ test('Provider switcher API: list, switch, add custom, test, and delete', async 
     expect(custom).toBeDefined();
     expect(saveData.config.activeProviderId).toBe(custom.id);
 
-    // 5. Delete custom provider profile
+    // 5. Discover every model and persist a model selection for the active route
+    const modelsRes = await fetch(`${base}/api/providers/models?providerId=${encodeURIComponent(custom.id)}`);
+    const modelsData = await modelsRes.json() as any;
+    expect(modelsRes.status).toBe(200);
+    expect(modelsData.models).toEqual(['mock-model-1', 'mock-model-2']);
+    expect(modelsData.modelDetails).toHaveLength(2);
+    expect(modelsData.modelDetails[0].contextWindow).toBe(131072);
+    const modelSwitchRes = await fetch(`${base}/api/providers/switch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ providerId: custom.id, model: 'mock-model-2' }),
+    });
+    const modelSwitchData = await modelSwitchRes.json() as any;
+    expect(modelSwitchRes.status).toBe(200);
+    expect(modelSwitchData.config.model).toBe('mock-model-2');
+    expect(modelSwitchData.config.providers.find((p: any) => p.id === custom.id).model).toBe('mock-model-2');
+
+    // 6. Delete custom provider profile
     const delRes = await fetch(`${base}/api/providers/delete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -103,7 +120,7 @@ test('Provider switcher API: list, switch, add custom, test, and delete', async 
     expect(delData.success).toBe(true);
     expect(delData.config.providers.some((p: any) => p.id === custom.id)).toBe(false);
 
-    // 6. Refuse to delete built-in preset
+    // 7. Refuse to delete built-in preset
     const badDel = await fetch(`${base}/api/providers/delete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
