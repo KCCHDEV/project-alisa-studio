@@ -519,8 +519,9 @@ Push main:
 ```text
 install
 build
-package Windows
-package macOS
+package Linux (.deb + .AppImage)
+package Windows (.exe + .msi)
+package macOS (.dmg)
 upload artifacts
 ```
 
@@ -529,8 +530,7 @@ Tag `v*`:
 ```text
 install
 build
-publish Windows
-publish macOS
+build all platform packages
 GitHub Release
 ```
 

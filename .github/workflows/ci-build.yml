@@ -1,4 +1,4 @@
-name: Alisa Studio · Verify and Package
+name: Alisa Studio · Verify and Release
 on:
   push:
     branches: [main]
@@ -22,31 +22,63 @@ jobs:
       - run: bun test
       - run: bun run build
   package:
+    name: Package ${{ matrix.platform }}
     needs: verify
     if: github.event_name != 'pull_request'
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        include:
+          - platform: linux-x64
+            os: ubuntu-latest
+            bundles: deb,appimage
+            artifact: alisa-linux-x64
+          - platform: windows-x64
+            os: windows-latest
+            bundles: nsis,msi
+            artifact: alisa-windows-x64
+          - platform: macos
+            os: macos-latest
+            bundles: dmg
+            artifact: alisa-macos
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux Tauri dependencies
+        if: matrix.platform == 'linux-x64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
       - run: bun install --frozen-lockfile
-      - name: Build Windows installers
-        if: matrix.os == 'windows-latest'
-        run: bunx tauri build --bundles nsis,msi
-      - name: Build macOS disk image
-        if: matrix.os == 'macos-latest'
-        run: bunx tauri build --bundles dmg
+      - name: Build Linux installers
+        if: matrix.platform == 'linux-x64'
+        env:
+          # linuxdeploy's bundled strip cannot read modern .relr.dyn ELF sections.
+          NO_STRIP: "true"
+        run: bunx tauri build --bundles "${{ matrix.bundles }}"
+      - name: Build Windows and macOS installers
+        if: matrix.platform != 'linux-x64'
+        run: bunx tauri build --bundles "${{ matrix.bundles }}"
       - uses: actions/upload-artifact@v4
         with:
-          name: alisa-${{ matrix.os }}
+          name: ${{ matrix.artifact }}
           path: src-tauri/target/release/bundle/
           if-no-files-found: error
+          retention-days: 14
   release:
+    name: Publish GitHub Release
     needs: package
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
@@ -57,11 +89,34 @@ jobs:
         with:
           pattern: alisa-*
           path: packages
+          merge-multiple: false
       - uses: softprops/action-gh-release@v2
         with:
+          name: Project Alisa Studio ${{ github.ref_name }}
+          generate_release_notes: true
+          body: |
+            ## Project Alisa Studio ${{ github.ref_name }}
+
+            Native Tauri V2 installers built by the cross-platform release matrix:
+
+            | Platform | Installer files | Recommended use |
+            | --- | --- | --- |
+            | Linux x64 | `.deb`, `.AppImage` | Debian/Ubuntu package or portable Linux app |
+            | Windows x64 | `.exe` (NSIS), `.msi` | NSIS is the simplest install; MSI is suitable for managed deployment |
+            | macOS | `.dmg` | Drag the app into Applications |
+
+            ### Notes
+
+            - This release is a native desktop app only; it does not publish a browser/web build.
+            - Windows and macOS artifacts are unsigned until signing certificates and Apple notarization credentials are configured.
+            - Linux packages are produced on the GitHub Linux runner; the AppImage build uses `NO_STRIP=true` for modern ELF compatibility and may require host WebKit/GTK compatibility libraries.
+            - The app stores provider settings and sessions in the OS app-data directory, not in the project repository.
+
+            See the complete install and troubleshooting guide in [`docs/RELEASE.md`](https://github.com/${{ github.repository }}/blob/${{ github.sha }}/docs/RELEASE.md).
           files: |
+            packages/**/*.AppImage
+            packages/**/*.deb
+            packages/**/*.dmg
             packages/**/*.exe
             packages/**/*.msi
-            packages/**/*.dmg
-            packages/**/*.deb
-            packages/**/*.AppImage
+          fail_on_unmatched_files: true

@@ -1,6 +1,6 @@
 {
   "name": "project-alisa",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Project Alisa Studio — Personal AI Coding & Automation Harness",
   "type": "module",
   "scripts": {

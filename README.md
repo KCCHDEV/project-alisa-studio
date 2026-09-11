@@ -295,11 +295,23 @@ OMNIROUTE_BASE_URL=http://127.0.0.1:10009/v1
 
 Output อยู่ใน `src-tauri/target/release/bundle/`
 
-Installer ที่ release รองรับ: Windows `.exe` (NSIS) + `.msi`, macOS `.dmg`, และ Linux `.deb`/`.AppImage` เมื่อมี Linux runner. Windows/macOS builds เป็น unsigned builds หากยังไม่ได้ตั้งค่า certificate หรือ Apple signing identity.
+### Native release matrix
+
+ทุก tag รูปแบบ `v*` จะ build และ publish installer แยกตาม OS ใน GitHub Release เดียวกัน:
+
+| OS | CI runner | ไฟล์ที่ได้ | ใช้ติดตั้งแบบไหน |
+| --- | --- | --- | --- |
+| Linux x64 | `ubuntu-latest` | `.deb`, `.AppImage` | `.deb` สำหรับ Debian/Ubuntu หรือ `.AppImage` แบบ portable; CI ใช้ `NO_STRIP=true` |
+| Windows x64 | `windows-latest` | `.exe` (NSIS), `.msi` | `.exe` ติดตั้งง่าย หรือ `.msi` สำหรับ managed deployment |
+| macOS | `macos-latest` | `.dmg` | เปิด disk image แล้วลากแอปเข้า Applications |
+
+Windows และ macOS เป็น unsigned build จนกว่าจะตั้งค่า code-signing certificate และ Apple signing/notarization credentials. รายละเอียดขั้นตอน, architecture, dependency ของ Linux และวิธีแก้ Gatekeeper/SmartScreen อยู่ที่ [docs/RELEASE.md](docs/RELEASE.md)
+
+ขอบเขตของ release ปัจจุบันคือ desktop OS หลัก 3 กลุ่ม: Linux x64, Windows x64 และ macOS ตาม architecture ของ runner; ไม่รวม Android, iOS หรือ web/standalone browser
 
 Automatic in-app updates are not configured in this build; use the published release artifacts manually.
 
-Release ล่าสุดอยู่ที่ [GitHub Releases](https://github.com/KCCHDEV/project-alisa-studio/releases) และ Linux package จะใช้ไฟล์ `.deb` ที่สร้างจาก Tauri V2.
+Release ล่าสุดอยู่ที่ [GitHub Releases](https://github.com/KCCHDEV/project-alisa-studio/releases). `v2.0.0` เป็น release ก่อน cross-platform matrix; tag ถัดไปจะใช้ workflow ใหม่นี้เพื่อแนบ Linux, Windows และ macOS ใน release เดียวกัน.
 
 ---
 
@@ -311,17 +323,17 @@ Pull Request
 
 Push main
    ├─ Verify build
-   ├─ Package Windows
-   └─ Package macOS
+   ├─ Package Linux (`.deb` + `.AppImage`)
+   ├─ Package Windows (`.exe` + `.msi`)
+   └─ Package macOS (`.dmg`)
 
 Tag v*
    ├─ Verify build
-   ├─ Publish Windows release
-   ├─ Publish macOS release
-   └─ Publish Linux `.deb` when available
+   ├─ Build all three platform packages
+   └─ Publish one GitHub Release with every installer
 ```
 
-CI ใช้ permission แบบ read-only เป็นค่าเริ่มต้น และให้ `contents: write` เฉพาะ release jobs
+CI ใช้ permission แบบ read-only เป็นค่าเริ่มต้น, package job แยก runner ต่อ OS, และให้ `contents: write` เฉพาะ release job. ถ้า runner ใด build ไม่ผ่าน release จะไม่ถูก publish แบบขาด installer เพื่อไม่ให้ผู้ใช้คิดว่ารองรับทุก OS ทั้งที่ artifact ไม่ครบ
 
 ---
 
