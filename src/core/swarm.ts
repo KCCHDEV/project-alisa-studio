@@ -50,6 +50,7 @@ export interface SwarmRunnerOptions {
   llmConfig: LLMConfig;
   contextWindow?: number;
   goal?: Goal;
+  autoApprove?: boolean;
   requestApproval?: AgentOptions['requestApproval'];
   onEvent?: (event: AgentEvent) => void;
   onGoalUpdate?: (goal: Goal | undefined) => void;
@@ -139,6 +140,7 @@ export class SwarmRunner {
       maxIterations: definition.maxIterations,
       goal: this.currentGoal,
       contextWindow: this.options.contextWindow,
+      autoApprove: this.options.autoApprove,
       llm: new LLMClient({ ...this.options.llmConfig }),
       requestApproval: this.options.requestApproval
         ? (action, details, signal) => this.options.requestApproval!(action, { ...details, agentRole: definition.role }, signal)

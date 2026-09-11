@@ -15,6 +15,8 @@ export interface AgentOptions {
   sessionId?: string;
   goal?: Goal;
   contextWindow?: number;
+  /** Skip approval pauses for tools explicitly marked as approval-gated. */
+  autoApprove?: boolean;
   onGoalUpdate?: (goal: Goal | undefined) => void;
   requestApproval?: (action: string, details: Record<string, unknown>, signal: AbortSignal) => Promise<boolean>;
   onEvent?: (event: AgentEvent) => void;
@@ -23,6 +25,7 @@ export interface AgentOptions {
 export class Agent {
   private mode: AgentMode;
   private requestApproval?: AgentOptions['requestApproval'];
+  private autoApprove = false;
   private cwd: string;
   private llm: LLMClient;
   private tools: ToolRegistry;
@@ -43,6 +46,7 @@ export class Agent {
   constructor(options: AgentOptions) {
     this.mode = options.mode || 'code';
     this.requestApproval = options.requestApproval;
+    this.autoApprove = options.autoApprove === true;
     this.cwd = options.cwd;
     this.llm = options.llm;
     this.tools = options.toolRegistry || new ToolRegistry();
@@ -255,7 +259,7 @@ export class Agent {
           try {
             const validatedArgs = toolDef.parameters.parse(parsedArgs);
             if (this.isReadOnlyMode() && !readOnlyTools.has(toolName)) throw new Error(`${this.mode[0].toUpperCase()}${this.mode.slice(1)} mode allows reading and planning only`);
-            if (toolDef.requiresApproval) {
+            if (toolDef.requiresApproval && !this.autoApprove) {
               this.setStatus('waiting_approval', `Approve ${toolName} to continue`);
               const approved = await this.requestApproval?.(toolName, parsedArgs, this.currentAbortController.signal);
               if (!approved || this.isAborted) throw new Error('Tool execution was not approved');
@@ -328,8 +332,11 @@ export class Agent {
       : this.mode === 'plan'
         ? 'Plan mode: inspect the workspace and maintain a visible checklist with update_plan. Do not modify files or run shell commands.'
         : this.mode === 'auto'
-          ? 'Auto mode: carry the task through to verification. Use the visible checklist for multi-step work and ask approval for shell commands.'
+          ? 'Auto mode: carry the task through to verification. Use the visible checklist for multi-step work.'
           : 'Code mode: inspect before editing, use the visible checklist for multi-step work, then verify the result.';
+    const safetyText = this.autoApprove
+      ? 'YOLO mode is enabled: execute approval-gated tools without pausing for confirmation. Keep all workspace, read-only mode, and security policy boundaries.'
+      : 'Approval-gated tools require an explicit user approval before execution.';
     const goalText = this.goal
       ? `## Active Goal\nTitle: ${this.goal.title}\nStatus: ${this.goal.status}\nProgress: ${this.goal.progress}%${this.goal.description ? `\nDescription: ${this.goal.description}` : ''}`
       : '## Active Goal\nNo persistent goal is set for this session.';
@@ -339,6 +346,7 @@ export class Agent {
       'File tools are workspace-scoped. Terminal runs with the OS user permissions.',
       'For multi-step work, keep the persistent goal current with update_goal and the visible checklist current with update_plan.',
       modeText,
+      safetyText,
       goalText,
       instructionText ? `\n## Project Instructions\n${instructionText}` : '',
     ].filter(Boolean).join('\n');

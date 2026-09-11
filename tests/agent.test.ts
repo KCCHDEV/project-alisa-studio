@@ -76,6 +76,37 @@ test('Ask mode and denied shell approval prevent execution even when the provide
   }
 });
 
+test('YOLO mode executes approval-gated tools without requesting confirmation', async () => {
+  let executions = 0;
+  let approvalCalls = 0;
+  let calls = 0;
+  const registry = new ToolRegistry();
+  registry.register({
+    name: 'terminal',
+    description: 'test terminal',
+    requiresApproval: true,
+    parameters: z.object({ command: z.string() }),
+    async execute() { executions++; return 'executed'; },
+  });
+  const llm = {
+    chatStream: async () => ++calls === 1
+      ? { content: '', thought: '', finishReason: 'tool_calls', toolCalls: [{ id: 'yolo1', type: 'function', function: { name: 'terminal', arguments: '{"command":"echo test"}' } }] }
+      : { content: 'Done without a prompt', thought: '', finishReason: 'stop', toolCalls: [] },
+  } as unknown as LLMClient;
+  const agent = new Agent({
+    cwd: process.cwd(),
+    toolRegistry: registry,
+    llm,
+    mode: 'code',
+    autoApprove: true,
+    requestApproval: async () => { approvalCalls++; return false; },
+  });
+  const messages = await agent.runTask('Run the command');
+  expect(executions).toBe(1);
+  expect(approvalCalls).toBe(0);
+  expect(messages.at(-1)?.content).toBe('Done without a prompt');
+});
+
 test('Plan mode exposes a durable checklist tool while hiding mutation tools', async () => {
   let receivedTools: string[] = [];
   let planUpdates: unknown[] = [];

@@ -51,6 +51,18 @@ test('Provider switcher API: list, switch, add custom, test, and delete', async 
     expect(cfg.providers.some((p: any) => p.id === 'omniroute')).toBe(true);
     expect(cfg.providers.some((p: any) => p.id === 'openrouter')).toBe(true);
     expect(cfg.activeProviderId).toBe('omniroute');
+    expect(cfg.yoloMode).toBe(false);
+
+    // 1b. YOLO mode is an explicit, persisted app setting
+    const yoloRes = await fetch(`${base}/api/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ yoloMode: true }),
+    });
+    const yoloData = await yoloRes.json() as any;
+    expect(yoloRes.status).toBe(200);
+    expect(yoloData.success).toBe(true);
+    expect(yoloData.config.yoloMode).toBe(true);
 
     // 2. Switch provider to OpenRouter
     const switchRes = await fetch(`${base}/api/providers/switch`, {

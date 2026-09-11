@@ -50,6 +50,7 @@ Repository นี้มีเฉพาะ source code ของแอป ไม�
 | 🛠️ | **Local Tools** | File read/write/patch/search, persistent goal และ terminal command พร้อม timeout |
 | 🖥️ | **Integrated Terminal** | local shell แบบ persistent และ remote SSH session ในแอปเดียว โดยไม่บันทึก password หรือ private key |
 | 🐝 | **Agent Swarm** | staged Explorer → Planner → Builder → Reviewer พร้อมสถานะ worker และเวลารัน |
+| ⚡ | **YOLO Mode** | เปิด/ปิดโหมดที่ข้าม approval prompt สำหรับเครื่องมือที่ถูกกำกับสิทธิ์ โดยค่าเริ่มต้นปิดและบันทึกถาวร |
 | 📊 | **Context Window** | แสดง token estimate, max context ของ model และ automatic compaction |
 | ↩️ | **Snapshots / Rollback** | เก็บ snapshot ก่อน file write/patch ที่รองรับ เพื่อย้อนการแก้ไขล่าสุด |
 | 🧩 | **Skills** | โหลด Hermes-style `SKILL.md` และ workspace skills |
@@ -213,6 +214,12 @@ V2 bundle มี `mcp` และ `computer-use` เป็น built-in instructio
 
 กดปุ่ม ✨ ด้านบนหรือใช้ `/character` เพื่อซ่อน/แสดง ระบบจำค่าบนเครื่องด้วย local webview storage.
 
+### YOLO mode
+
+YOLO เป็นโหมดที่ผู้ใช้เปิดเองเพื่อให้ agent ทำงานต่อโดยไม่หยุดรอการกดอนุมัติสำหรับ tool ที่ถูกกำกับด้วย `requiresApproval` เช่น terminal. ค่าเริ่มต้นคือปิด และเปิด/ปิดได้จากปุ่ม `YOLO`/`Safe`, Command Palette, `/yolo` หรือ Settings.
+
+เมื่อเปิด YOLO แล้ว ระบบยังคงตรวจ argument, จำกัด workspace, รักษา Ask/Plan ให้เป็น read-only และใช้ terminal security gatekeeper ตามเดิม. สถานะ `YOLO · no confirm` จะแสดงใน composer ตลอดเวลา และค่าจะเก็บใน app data ด้วย atomic config + recovery backups เพื่อไม่หายเมื่อเปิดแอปใหม่.
+
 ---
 
 ## 🚀 Run from source
@@ -287,6 +294,8 @@ OMNIROUTE_BASE_URL=http://127.0.0.1:10009/v1
 | `bun run dist` | Alias for the Tauri package build |
 
 Output อยู่ใน `src-tauri/target/release/bundle/`
+
+Installer ที่ release รองรับ: Windows `.exe` (NSIS) + `.msi`, macOS `.dmg`, และ Linux `.deb`/`.AppImage` เมื่อมี Linux runner. Windows/macOS builds เป็น unsigned builds หากยังไม่ได้ตั้งค่า certificate หรือ Apple signing identity.
 
 Automatic in-app updates are not configured in this build; use the published release artifacts manually.
 

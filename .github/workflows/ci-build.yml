@@ -35,7 +35,12 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - uses: dtolnay/rust-toolchain@stable
       - run: bun install --frozen-lockfile
-      - run: bun run dist
+      - name: Build Windows installers
+        if: matrix.os == 'windows-latest'
+        run: bunx tauri build --bundles nsis,msi
+      - name: Build macOS disk image
+        if: matrix.os == 'macos-latest'
+        run: bunx tauri build --bundles dmg
       - uses: actions/upload-artifact@v4
         with:
           name: alisa-${{ matrix.os }}

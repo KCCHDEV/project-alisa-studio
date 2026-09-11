@@ -35,6 +35,7 @@ interface AppConfig extends LLMConfig {
   recentWorkspaces: string[];
   activeProviderId: string;
   providers: ProviderProfile[];
+  yoloMode: boolean;
 }
 
 interface ProviderModel {
@@ -236,6 +237,7 @@ let currentConfig: AppConfig = {
   recentWorkspaces: [process.cwd()],
   activeProviderId: DEFAULT_PROVIDERS[0].id,
   providers: DEFAULT_PROVIDERS,
+  yoloMode: false,
 };
 
 function cloneConfig(config: AppConfig = currentConfig): AppConfig {
@@ -262,6 +264,7 @@ if (configFileToRead && loadedConfig.value) {
   try {
     const saved = loadedConfig.value;
     currentConfig = { ...currentConfig, ...saved };
+    currentConfig.yoloMode = saved.yoloMode === true;
     if (!Array.isArray(currentConfig.providers) || currentConfig.providers.length === 0) {
       currentConfig.providers = DEFAULT_PROVIDERS;
     } else {
@@ -347,6 +350,7 @@ function getPublicConfig(config: AppConfig) {
     hasKey: Boolean(config.apiKey),
     apiKeyMasked: maskKey(config.apiKey),
     activeProviderId: config.activeProviderId || 'omniroute',
+    yoloMode: config.yoloMode === true,
     providers: (config.providers || DEFAULT_PROVIDERS).map(p => ({
       id: p.id,
       name: p.name,
@@ -404,7 +408,7 @@ function pickFolderNative(): Promise<string | null> {
 const sessions = new SessionStore(ALISA_SESSIONS_DIR);
 const activeWorkspaces = new Set<string>();
 type SessionSavedEvent = { type: 'session_saved'; sessionId: string; status: AgentStatus; detail?: string; durationMs: number; completedAt: number; swarm?: boolean; agents?: SwarmAgent[] };
-type TaskStateEvent = { type: 'task_state'; sessionId: string; status: AgentStatus; detail?: string; model: string; mode: AgentMode; startedAt: number; swarm?: boolean; contextWindow?: number };
+type TaskStateEvent = { type: 'task_state'; sessionId: string; status: AgentStatus; detail?: string; model: string; mode: AgentMode; startedAt: number; swarm?: boolean; yolo?: boolean; contextWindow?: number };
 type TerminalServerEvent =
   | { type: 'terminal_started'; id: string; kind: 'local' | 'ssh'; cwd?: string; host?: string; username?: string; port?: number; startedAt: number }
   | { type: 'terminal_output'; sessionId: string; data: string; stream: 'stdout' | 'stderr' }
@@ -722,6 +726,10 @@ const server = http.createServer(async (req, res) => {
               throw new Error('Model must be a non-empty identifier');
             }
             nextConfig.model = data.model.trim();
+          }
+          if (data.yoloMode !== undefined) {
+            if (typeof data.yoloMode !== 'boolean') throw new Error('YOLO mode must be a boolean');
+            nextConfig.yoloMode = data.yoloMode;
           }
           if (data.workspaceDir !== undefined) {
             if (typeof data.workspaceDir !== 'string' || !data.workspaceDir.trim()) {
@@ -1329,6 +1337,7 @@ wss.on('connection', (ws: WebSocket) => {
       const supportedModes = new Set<AgentMode>(['ask', 'plan', 'code', 'auto']);
       const mode: AgentMode = supportedModes.has(msg.mode) ? msg.mode : (session.mode || 'code');
       const useSwarm = msg.swarm === true;
+      const useYolo = currentConfig.yoloMode === true;
       const requestedModel = typeof msg.model === 'string' && msg.model.trim()
         ? msg.model.trim()
         : currentConfig.model;
@@ -1344,7 +1353,8 @@ wss.on('connection', (ws: WebSocket) => {
       session.swarm = useSwarm;
       sessions.save(session);
       const startedAt = Date.now();
-      activeTaskStates.set(workspace, { type: 'task_state', sessionId: session.id, status: 'thinking', detail: useSwarm ? 'Starting agent swarm' : 'Starting task', model: requestedModel, mode, startedAt, swarm: useSwarm, contextWindow });
+      activeTaskStates.set(workspace, { type: 'task_state', sessionId: session.id, status: 'thinking', detail: useSwarm ? 'Starting agent swarm' : 'Starting task', model: requestedModel, mode, startedAt, swarm: useSwarm, yolo: useYolo, contextWindow });
+      broadcast(activeTaskStates.get(workspace)!);
       const requestApproval = (action: string, details: Record<string, unknown>, signal: AbortSignal) => new Promise<boolean>(resolve => {
         const resolveId = crypto.randomUUID();
         const finish = (approved: boolean) => { approvals.delete(resolveId); signal.removeEventListener('abort', cancel); clearTimeout(timer); resolve(approved); };
@@ -1403,6 +1413,7 @@ wss.on('connection', (ws: WebSocket) => {
             skillNames,
             llmConfig: { ...currentConfig, model: requestedModel },
             contextWindow,
+            autoApprove: useYolo,
             goal: session.goal,
             requestApproval,
             onEvent: handleAgentEvent,
@@ -1418,6 +1429,7 @@ wss.on('connection', (ws: WebSocket) => {
             mode,
             goal: session.goal,
             contextWindow,
+            autoApprove: useYolo,
             requestApproval,
             llm: new LLMClient({ ...currentConfig, model: requestedModel }),
             onEvent: handleAgentEvent,

@@ -88,6 +88,7 @@ type PublicConfig = {
   providers: ProviderProfile[];
   hasKey?: boolean;
   apiKeyMasked?: string;
+  yoloMode?: boolean;
 };
 
 type CapabilityStatusView = {
@@ -185,6 +186,7 @@ const SLASH_COMMANDS = [
   { id: 'models', label: '/models', detail: 'Change current model' },
   { id: 'agents', label: '/agents', detail: 'Cycle agent mode' },
   { id: 'swarm', label: '/swarm', detail: 'Toggle the multi-agent coding swarm' },
+  { id: 'yolo', label: '/yolo', detail: 'Toggle no-confirmation execution mode' },
   { id: 'skills', label: '/skills', detail: 'Show bundled MCP and Computer Use skills' },
   { id: 'character', label: '/character', detail: 'Show or hide the Yurachi companion' },
   { id: 'goal', label: '/goal', detail: 'Open the persistent session goal' },
@@ -840,6 +842,8 @@ export default function AppV2() {
   const [plan, setPlan] = useState<PlanItem[]>([]);
   const [mode, setMode] = useState<AgentMode>('code');
   const [swarmEnabled, setSwarmEnabled] = useState(false);
+  const [yoloMode, setYoloMode] = useState(false);
+  const [yoloSaving, setYoloSaving] = useState(false);
   const [swarmAgents, setSwarmAgents] = useState<SwarmAgent[]>([]);
   const [swarmPhase, setSwarmPhase] = useState('');
   const [contextUsage, setContextUsage] = useState<ContextUsage>({ usedTokens: 0, maxTokens: 128_000, percent: 0 });
@@ -996,6 +1000,7 @@ export default function AppV2() {
     setActiveProviderId(next.activeProviderId || '');
     setModel(next.model || '');
     setModelDraft(next.model || '');
+    setYoloMode(next.yoloMode === true);
   }, []);
 
   const loadConfig = useCallback(async () => {
@@ -1141,6 +1146,7 @@ export default function AppV2() {
     if (data.type === 'task_state') {
       setStatus(data.status || 'idle');
       setStatusDetail(data.detail || (data.status === 'idle' ? 'Ready' : statusLabel(data.status, true)));
+      if (typeof data.yolo === 'boolean') setYoloMode(data.yolo);
       if (Number.isFinite(Number(data.contextWindow)) && Number(data.contextWindow) > 0) setContextUsage(previous => ({ ...previous, maxTokens: Number(data.contextWindow), percent: Math.min(100, Math.round((previous.usedTokens / Number(data.contextWindow)) * 100)) }));
       return;
     }
@@ -1434,6 +1440,30 @@ export default function AppV2() {
     }
   };
 
+  const toggleYolo = async () => {
+    if (busy) {
+      notify('Stop the active task before changing YOLO mode');
+      return;
+    }
+    if (yoloSaving) return;
+    const next = !yoloMode;
+    setYoloMode(next);
+    setYoloSaving(true);
+    try {
+      const data = await api<{ success: boolean; config: PublicConfig }>('/api/config', {
+        method: 'POST',
+        body: JSON.stringify({ yoloMode: next }),
+      });
+      applyConfig(data.config);
+      notify(next ? 'YOLO enabled · approval prompts bypassed' : 'YOLO disabled · approvals enabled');
+    } catch (error) {
+      setYoloMode(!next);
+      notify(errorText(error));
+    } finally {
+      setYoloSaving(false);
+    }
+  };
+
   const saveGoal = async () => {
     const title = goalDraftTitle.trim();
     if (!title || !sessionIdRef.current) {
@@ -1509,6 +1539,10 @@ export default function AppV2() {
     }
     if (commandId === 'swarm') {
       void toggleSwarm();
+      return;
+    }
+    if (commandId === 'yolo') {
+      void toggleYolo();
       return;
     }
     if (commandId === 'skills') {
@@ -1597,7 +1631,7 @@ export default function AppV2() {
     setStatus('thinking');
     setStatusDetail('Thinking…');
     addActivity({ kind: 'system', label: 'Task started', detail: prompt });
-    wsRef.current.send(JSON.stringify({ type: 'start_task', sessionId: sessionIdRef.current, prompt, skills, mode, model, swarm: swarmEnabled }));
+    wsRef.current.send(JSON.stringify({ type: 'start_task', sessionId: sessionIdRef.current, prompt, skills, mode, model, swarm: swarmEnabled, yolo: yoloMode }));
   };
 
   const stopTask = () => {
@@ -1872,6 +1906,7 @@ export default function AppV2() {
     { id: 'refresh-models', label: 'Refresh models', detail: 'Fetch every model from the active provider', run: () => void loadProviderModels(activeProviderId, true) },
     { id: 'change-agent', label: 'Change agent', detail: 'Cycle Auto, Code, Plan, and Ask', run: () => setMode(MODES[(MODES.findIndex(item => item.id === mode) + 1) % MODES.length].id) },
     { id: 'toggle-swarm', label: swarmEnabled ? 'Use single agent' : 'Enable agent swarm', detail: 'Run Explorer, Planner, Builder, and Reviewer', run: () => void toggleSwarm() },
+    { id: 'toggle-yolo', label: yoloMode ? 'Disable YOLO mode' : 'Enable YOLO mode', detail: 'Run approval-gated tools without confirmation prompts', run: () => void toggleYolo() },
     { id: 'toggle-character', label: showYurachiCompanion ? 'Hide Yurachi companion' : 'Show Yurachi companion', detail: 'Toggle the optional animated pose layer', run: () => { const next = !showYurachiCompanion; setShowYurachiCompanion(next); notify(next ? 'Yurachi companion shown' : 'Yurachi companion hidden'); } },
     { id: 'open-goal', label: 'Open goal', detail: 'Set the persistent session goal and progress', run: () => { setInspectorTab('goal'); setInspectorOpen(true); } },
     { id: 'open-files', label: 'Open project files', detail: 'Browse files or open the VSCode-style editor', run: () => { setSidebarTab('files'); setSidebarOpen(true); } },
@@ -1880,7 +1915,7 @@ export default function AppV2() {
     { id: 'open-project', label: 'Open project', detail: 'Choose another local workspace', run: () => void chooseWorkspace() },
     { id: 'settings', label: 'Settings', detail: 'Providers, model endpoint, and project', run: () => openSettings() },
     { id: 'toggle-inspector', label: 'Toggle inspector', detail: 'Show plan, changes, and activity', run: () => setInspectorOpen(value => !value) },
-  ], [activeProviderId, loadProviderModels, mode, notify, showYurachiCompanion, swarmEnabled]);
+  ], [activeProviderId, loadProviderModels, mode, notify, showYurachiCompanion, swarmEnabled, yoloMode]);
   const filteredCommandItems = useMemo(() => {
     const query = commandQuery.trim().toLowerCase();
     if (!query) return commandItems;
@@ -2008,6 +2043,9 @@ export default function AppV2() {
           </select>
           <button type="button" onClick={() => void toggleSwarm()} disabled={busy} aria-label="Toggle agent swarm" title="Toggle staged multi-agent swarm" className={'hidden rounded-lg border px-2 py-1.5 text-[10px] uppercase tracking-[0.12em] md:block ' + (swarmEnabled ? 'border-violet-300/25 bg-violet-300/10 text-violet-200' : 'border-white/[0.08] text-slate-600 hover:bg-white/[0.06] hover:text-slate-300')}>
             {swarmEnabled ? 'Swarm' : 'Solo'}
+          </button>
+          <button type="button" onClick={() => void toggleYolo()} disabled={busy || yoloSaving} aria-label="Toggle YOLO mode" title={yoloMode ? 'YOLO enabled: approval-gated tools run without confirmation' : 'Safe mode: approval-gated tools ask before running'} className={'hidden rounded-lg border px-2 py-1.5 text-[10px] uppercase tracking-[0.12em] md:block ' + (yoloMode ? 'border-rose-300/30 bg-rose-300/10 text-rose-200' : 'border-white/[0.08] text-slate-600 hover:bg-white/[0.06] hover:text-slate-300')}>
+            {yoloMode ? 'YOLO' : 'Safe'}
           </button>
           <div className="flex min-w-0 items-center gap-1.5">
             <select value={activeProviderId} onChange={event => void switchProvider(event.target.value)} aria-label="Provider" className="hidden max-w-[130px] rounded-lg border border-white/[0.08] bg-white/[0.04] px-2 py-1.5 text-[11px] text-slate-300 outline-none hover:bg-white/[0.08] lg:block">
@@ -2203,7 +2241,7 @@ export default function AppV2() {
               {fileReferenceOptions.length > 0 && <div className="terminal-autocomplete absolute bottom-full left-0 right-0 z-20 mb-2 border border-white/10 bg-black p-1"><div className="px-2 py-1 text-[10px] text-slate-700">Files · ↑ ↓ Enter</div>{fileReferenceOptions.map((file, index) => <button key={file.path} type="button" onClick={() => insertFileReference(file.path)} className={'flex w-full items-center gap-3 px-2 py-1.5 text-left text-xs ' + (index === fileReferenceIndex ? 'bg-white/[0.08] text-slate-100' : 'text-slate-500 hover:bg-white/[0.04] hover:text-slate-200')}><span className="w-4 text-slate-700">@</span><span className="truncate">{file.path}</span></button>)}</div>}
               <textarea ref={textareaRef} value={input} onChange={event => { setInput(event.target.value); setSlashIndex(0); setFileReferenceIndex(0); }} onKeyDown={handleComposerKeyDown} disabled={!connected || busy} rows={3} placeholder={connected ? '> Ask anything…' : '> Waiting for backend…'} className="w-full resize-none bg-transparent px-3 py-2 font-mono text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-600 disabled:cursor-not-allowed" />
               <div className="flex items-center justify-between gap-2 px-2 pb-1">
-                <div className="flex min-w-0 items-center gap-3 text-[10px] text-slate-600"><span className="text-slate-400">{swarmEnabled ? 'Swarm' : currentMode.label}</span><span className="hidden truncate sm:inline">{activeProvider?.name || 'Provider'} / {model || 'No model'}</span><span className="hidden lg:inline">ctx {formatTokenCount(contextUsage.usedTokens)}/{formatTokenCount(contextUsage.maxTokens)} · {contextUsage.percent}%</span><span className="hidden md:inline">⌘/Ctrl + Enter</span><span className="hidden xl:inline">{connected ? 'connected' : 'offline'}</span></div>
+                <div className="flex min-w-0 items-center gap-3 text-[10px] text-slate-600"><span className="text-slate-400">{swarmEnabled ? 'Swarm' : currentMode.label}</span><span className={yoloMode ? 'text-rose-200' : 'text-slate-600'}>{yoloMode ? 'YOLO · no confirm' : 'confirm actions'}</span><span className="hidden truncate sm:inline">{activeProvider?.name || 'Provider'} / {model || 'No model'}</span><span className="hidden lg:inline">ctx {formatTokenCount(contextUsage.usedTokens)}/{formatTokenCount(contextUsage.maxTokens)} · {contextUsage.percent}%</span><span className="hidden md:inline">⌘/Ctrl + Enter</span><span className="hidden xl:inline">{connected ? 'connected' : 'offline'}</span></div>
                 <div className="flex items-center gap-1.5"><button type="button" onClick={() => setInput(previous => previous ? previous + '\n\nPlease use a checklist and verify the result.' : 'Please use a checklist and verify the result.')} className="hidden rounded-lg p-2 text-slate-500 hover:bg-white/[0.06] hover:text-slate-200 sm:block" title="Add verification instruction"><Sparkles className="h-4 w-4" /></button>{busy ? <button type="button" onClick={stopTask} className="flex items-center gap-1.5 rounded-xl bg-rose-300/15 px-3 py-2 text-xs text-rose-200 hover:bg-rose-300/25"><Square className="h-3 w-3 fill-current" /> Stop</button> : <button type="submit" disabled={!input.trim() || !connected} className="alisa-primary-action flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40"><Send className="h-3.5 w-3.5" /> Send</button>}</div>
               </div>
             </form>
@@ -2307,6 +2345,7 @@ export default function AppV2() {
                   {providerNotice && <div className={'rounded-xl border px-3 py-2 text-xs ' + (providerNotice.toLowerCase().includes('error') || providerNotice.toLowerCase().includes('failed') || providerNotice.toLowerCase().includes('returned') ? 'border-rose-300/15 bg-rose-300/[0.06] text-rose-200' : 'border-emerald-300/15 bg-emerald-300/[0.06] text-emerald-200')}>{providerNotice}</div>}
                   <div className="flex flex-wrap gap-2"><button type="button" onClick={() => void testProvider()} disabled={providerTesting || !providerBaseURL} className="flex items-center gap-2 rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 hover:bg-white/[0.06] disabled:opacity-40">{providerTesting ? <Loader2 className="h-3.5 w-3.5 alisa-spinner" /> : <Wifi className="h-3.5 w-3.5" />} Test connection</button><button type="button" onClick={() => void saveProvider(false)} disabled={!providerName || !providerBaseURL || !providerModel} className="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 hover:bg-white/[0.06] disabled:opacity-40">Save profile</button><button type="button" onClick={() => void saveProvider(true)} disabled={!providerName || !providerBaseURL || !providerModel} className="rounded-xl bg-sky-300 px-3 py-2 text-xs font-semibold text-[#13202f] hover:bg-sky-200 disabled:opacity-40">Save & use</button></div>
                   <div className="border-t border-white/[0.07] pt-4"><div className="flex items-center gap-2 text-xs font-medium text-slate-300"><FolderOpen className="h-3.5 w-3.5 text-sky-200" />Current project</div><div className="mt-2 flex items-center gap-2 rounded-xl border border-white/[0.08] bg-black/20 p-3"><span className="min-w-0 flex-1 truncate font-mono text-[11px] text-slate-500">{workspaceDir}</span><button type="button" onClick={() => void chooseWorkspace()} className="shrink-0 rounded-lg bg-white/[0.07] px-2.5 py-1.5 text-[11px] text-slate-300 hover:bg-white/[0.12]">Change</button></div></div>
+                  <div className="border-t border-white/[0.07] pt-4"><div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2 text-xs font-medium text-slate-300"><ShieldCheck className={'h-3.5 w-3.5 ' + (yoloMode ? 'text-rose-200' : 'text-emerald-200')} />Execution safety</div><button type="button" onClick={() => void toggleYolo()} disabled={busy || yoloSaving} className={'rounded-lg border px-2.5 py-1.5 text-[10px] uppercase tracking-[0.12em] disabled:opacity-40 ' + (yoloMode ? 'border-rose-300/25 bg-rose-300/10 text-rose-200' : 'border-white/[0.1] text-slate-500 hover:bg-white/[0.06] hover:text-slate-200')}>{yoloMode ? 'YOLO enabled' : 'Confirm actions'}</button></div><p className="mt-2 text-[10px] leading-5 text-slate-600">YOLO skips confirmation pauses for approval-gated agent tools. Workspace boundaries, read-only Ask/Plan modes, argument validation, and the terminal security gate remain active. This setting is saved in app data.</p></div>
                   <div className="border-t border-white/[0.07] pt-4"><div className="mb-2 flex items-center gap-2 text-xs font-medium text-slate-300"><ShieldCheck className="h-3.5 w-3.5 text-emerald-200" />Bundled capabilities</div><div className="space-y-1.5 font-mono text-[10px]"><div className="flex items-center justify-between border-l border-emerald-300/40 px-2 py-1"><span className="text-slate-400">MCP skill</span><span className="text-emerald-200">{capabilities.mcp?.skillInstalled ? (capabilities.mcp.availability === 'ready' ? 'config detected' : 'preinstalled') : 'unavailable'}</span></div><div className="flex items-center justify-between border-l border-sky-300/40 px-2 py-1"><span className="text-slate-400">Computer Use skill</span><span className="text-sky-200">{capabilities.computerUse?.skillInstalled ? (capabilities.computerUse.availability === 'ready' ? 'bridge detected' : 'preinstalled') : 'unavailable'}</span></div><div className="px-2 pt-1 text-[9px] text-slate-600">{capabilities.mcp?.serverCount || 0} MCP server config{(capabilities.mcp?.serverCount || 0) === 1 ? '' : 's'} detected · credentials stay local</div></div></div>
                 </div>
               </div>

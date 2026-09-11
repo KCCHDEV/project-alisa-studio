@@ -121,6 +121,54 @@ test('failed agent tasks persist an error status instead of being reported as co
   }
 }, 15000);
 
+test('backend YOLO mode runs an approval-gated terminal tool without an approval event', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'alisa-server-yolo-'));
+  const provider = Bun.serve({ port: 0, async fetch(req) {
+    const { messages } = await req.json() as any;
+    const isToolResult = messages.at(-1).role === 'tool';
+    const delta = isToolResult
+      ? { content: 'YOLO terminal completed.' }
+      : { tool_calls: [{ index: 0, id: 'yolo-terminal', function: { name: 'terminal', arguments: '{"command":"echo yolo"}' } }] };
+    return new Response(`data: ${JSON.stringify({ choices: [{ delta, finish_reason: isToolResult ? 'stop' : 'tool_calls' }] })}\n\ndata: [DONE]\n`);
+  }});
+  const portProbe = Bun.serve({ port: 0, fetch: () => new Response() });
+  const port = portProbe.port!; portProbe.stop(true);
+  writeFileSync(join(root, '.ichigo-config.json'), JSON.stringify({ workspaceDir: root, apiKey: '', baseURL: provider.url.toString(), model: 'yolo-model', yoloMode: true }));
+  const child = Bun.spawn([process.execPath, resolve('src/server/index.ts')], { env: { ...process.env, PORT: String(port), ALISA_CONFIG_DIR: root }, stdout: 'ignore', stderr: 'pipe' });
+  const base = `http://127.0.0.1:${port}`;
+  let ws: WebSocket | undefined;
+  try {
+    let connected = false;
+    for (let i = 0; i < 60; i++) {
+      try { if ((await fetch(`${base}/api/config`)).ok) { connected = true; break; } } catch {}
+      await Bun.sleep(50);
+    }
+    expect(connected).toBe(true);
+    const config = await (await fetch(`${base}/api/config`)).json() as any;
+    expect(config.yoloMode).toBe(true);
+    const initial = await (await fetch(`${base}/api/sessions`)).json() as any;
+    const events: any[] = [];
+    ws = new WebSocket(`${base.replace('http', 'ws')}/ws`);
+    await new Promise<void>((resolveDone, reject) => {
+      const timer = setTimeout(() => reject(new Error('YOLO task timed out')), 6000);
+      ws!.on('open', () => ws!.send(JSON.stringify({ type: 'start_task', prompt: 'Run the command without asking', sessionId: initial.sessionId, mode: 'code' })));
+      ws!.on('message', data => {
+        const event = JSON.parse(data.toString()); events.push(event);
+        if (event.type === 'session_saved') { clearTimeout(timer); resolveDone(); }
+      });
+      ws!.on('error', reject);
+    });
+    expect(events.some(event => event.type === 'approval_requested')).toBe(false);
+    expect(events.some(event => event.type === 'task_state' && event.yolo === true)).toBe(true);
+    expect(events.some(event => event.type === 'tool_call_end' && event.toolName === 'terminal' && !event.error)).toBe(true);
+    const saved = await (await fetch(`${base}/api/sessions?id=${initial.sessionId}`)).json() as any;
+    expect(saved.messages.at(-1).content).toContain('YOLO terminal completed');
+  } finally {
+    ws?.close(); child.kill(); await child.exited; provider.stop(true);
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 15000);
+
 test('goal persistence and staged swarm are exposed through the native backend protocol', async () => {
   const root = mkdtempSync(join(tmpdir(), 'alisa-server-swarm-'));
   let providerRequests = 0;
