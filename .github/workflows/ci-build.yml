@@ -93,26 +93,8 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           name: Project Alisa Studio ${{ github.ref_name }}
-          generate_release_notes: true
-          body: |
-            ## Project Alisa Studio ${{ github.ref_name }}
-
-            Native Tauri V2 installers built by the cross-platform release matrix:
-
-            | Platform | Installer files | Recommended use |
-            | --- | --- | --- |
-            | Linux x64 | `.deb`, `.AppImage` | Debian/Ubuntu package or portable Linux app |
-            | Windows x64 | `.exe` (NSIS), `.msi` | NSIS is the simplest install; MSI is suitable for managed deployment |
-            | macOS | `.dmg` | Drag the app into Applications |
-
-            ### Notes
-
-            - This release is a native desktop app only; it does not publish a browser/web build.
-            - Windows and macOS artifacts are unsigned until signing certificates and Apple notarization credentials are configured.
-            - Linux packages are produced on the GitHub Linux runner; the AppImage build uses `NO_STRIP=true` for modern ELF compatibility and may require host WebKit/GTK compatibility libraries.
-            - The app stores provider settings and sessions in the OS app-data directory, not in the project repository.
-
-            See the complete install and troubleshooting guide in [`docs/RELEASE.md`](https://github.com/${{ github.repository }}/blob/${{ github.sha }}/docs/RELEASE.md).
+          body_path: RELEASE_NOTES.md
+          generate_release_notes: false
           files: |
             packages/**/*.AppImage
             packages/**/*.deb
