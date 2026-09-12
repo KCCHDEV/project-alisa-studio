@@ -1,17 +1,135 @@
 import type { Message, ToolCall } from '../core/types.ts';
 
+export interface RetryInfo {
+  attempt: number;
+  maxRetries: number;
+  error: Error;
+  delayMs: number;
+  willRetry: boolean;
+}
+
 export interface LLMConfig {
   apiKey: string;
   baseURL: string;
   model: string;
   temperature?: number;
   maxTokens?: number;
+  maxRetries?: number;
+  retryDelayMs?: number;
+  connectTimeoutMs?: number;
+  streamInactivityTimeoutMs?: number;
 }
 
 export interface StreamCallbacks {
   onToken?: (token: string) => void;
   onThought?: (thought: string) => void;
   onToolCall?: (toolCall: ToolCall) => void;
+  onRetry?: (info: RetryInfo) => void;
+  onResetPartialStream?: () => void;
+}
+
+const isTestEnv = typeof process !== 'undefined' && (Boolean(process.env?.NODE_ENV === 'test') || Boolean(process.env?.BUN_TEST));
+
+export function isRetryableError(err: any): boolean {
+  if (!err) return false;
+  const msg = (err.message || String(err)).toLowerCase();
+  const status = typeof err.status === 'number' ? err.status : undefined;
+
+  // Explicit user abort should not be retried
+  if (msg.includes('task aborted') || msg.includes('user aborted')) {
+    return false;
+  }
+
+  // Non-retryable HTTP status codes
+  if (status === 401 || status === 403 || status === 404) return false;
+  if (status === 400 && !msg.includes('rate limit') && !msg.includes('overloaded')) return false;
+
+  // Retryable HTTP status codes: 429 (rate limit), 408 (timeout), 500, 502, 503, 504
+  if (status === 429 || status === 408 || (status && status >= 500 && status <= 599)) return true;
+
+  // Check error message patterns
+  if (
+    msg.includes('429') ||
+    msg.includes('rate limit') ||
+    msg.includes('too many requests') ||
+    msg.includes('500') ||
+    msg.includes('502') ||
+    msg.includes('503') ||
+    msg.includes('504') ||
+    msg.includes('bad gateway') ||
+    msg.includes('service unavailable') ||
+    msg.includes('gateway timeout') ||
+    msg.includes('gateway unavailable') ||
+    msg.includes('fetch failed') ||
+    msg.includes('network') ||
+    msg.includes('econnreset') ||
+    msg.includes('etimedout') ||
+    msg.includes('econnrefused') ||
+    msg.includes('socket') ||
+    msg.includes('stalled') ||
+    msg.includes('stream ended before completion') ||
+    msg.includes('incomplete tool call') ||
+    msg.includes('malformed streaming data') ||
+    msg.includes('provider stream failed') ||
+    msg.includes('timed out')
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function delayWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new Error('Task aborted'));
+    let timer: any;
+    const abortHandler = () => {
+      clearTimeout(timer);
+      reject(new Error('Task aborted'));
+    };
+    timer = setTimeout(() => {
+      signal?.removeEventListener('abort', abortHandler);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', abortHandler, { once: true });
+  });
+}
+
+function readWithTimeout<T>(
+  readPromise: Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string,
+  signal?: AbortSignal
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let timer: any;
+    const abortHandler = () => {
+      clearTimeout(timer);
+      reject(new Error('Task aborted'));
+    };
+    if (signal?.aborted) {
+      return reject(new Error('Task aborted'));
+    }
+    signal?.addEventListener('abort', abortHandler, { once: true });
+
+    timer = setTimeout(() => {
+      signal?.removeEventListener('abort', abortHandler);
+      reject(new Error(timeoutMessage));
+    }, timeoutMs);
+
+    readPromise.then(
+      val => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', abortHandler);
+        resolve(val);
+      },
+      err => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', abortHandler);
+        reject(err);
+      }
+    );
+  });
 }
 
 export class LLMClient {
@@ -23,6 +141,10 @@ export class LLMClient {
       baseURL: config.baseURL.replace(/\/+$/, ''),
       temperature: config.temperature ?? 0.2,
       maxTokens: config.maxTokens ?? 4096,
+      maxRetries: config.maxRetries ?? (isTestEnv ? 1 : 3),
+      retryDelayMs: config.retryDelayMs ?? (isTestEnv ? 10 : 1500),
+      connectTimeoutMs: config.connectTimeoutMs ?? 45000,
+      streamInactivityTimeoutMs: config.streamInactivityTimeoutMs ?? 25000,
     };
   }
 
@@ -39,9 +161,41 @@ export class LLMClient {
   }
 
   /**
-   * Stream a chat completion with support for tool calling
+   * Stream a chat completion with support for tool calling and automatic retry
    */
   async chatStream(
+    messages: Message[],
+    tools: Array<{ type: 'function'; function: any }>,
+    callbacks: StreamCallbacks,
+    signal?: AbortSignal
+  ): Promise<{ content: string; thought: string; toolCalls: ToolCall[]; finishReason: string; model: string }> {
+    const maxAttempts = this.config.maxRetries ?? (isTestEnv ? 1 : 3);
+    const initialDelay = this.config.retryDelayMs ?? (isTestEnv ? 10 : 1500);
+
+    let lastError: any;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (signal?.aborted) throw new Error('Task aborted');
+      try {
+        return await this.executeChatStream(messages, tools, callbacks, signal);
+      } catch (err: any) {
+        lastError = err;
+        const retryable = isRetryableError(err);
+        const hasMoreAttempts = attempt < maxAttempts;
+
+        if (!hasMoreAttempts || !retryable || signal?.aborted) {
+          throw err;
+        }
+
+        callbacks.onResetPartialStream?.();
+        const delayMs = Math.min(12000, Math.round(initialDelay * Math.pow(1.8, attempt - 1) + Math.random() * 300));
+        callbacks.onRetry?.({ attempt, maxRetries: maxAttempts, error: err, delayMs, willRetry: true });
+        await delayWithSignal(delayMs, signal);
+      }
+    }
+    throw lastError || new Error('LLM execution failed after retries');
+  }
+
+  private async executeChatStream(
     messages: Message[],
     tools: Array<{ type: 'function'; function: any }>,
     callbacks: StreamCallbacks,
@@ -82,12 +236,29 @@ export class LLMClient {
     };
     if (this.config.apiKey) headers.Authorization = `Bearer ${this.config.apiKey}`;
 
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(180000)]) : AbortSignal.timeout(180000),
-    });
+    const connectTimeoutMs = this.config.connectTimeoutMs ?? 45000;
+    const inactivityTimeoutMs = this.config.streamInactivityTimeoutMs ?? 25000;
+
+    const abortTimeout = AbortSignal.timeout(connectTimeoutMs);
+    const fetchSignal = signal ? AbortSignal.any([signal, abortTimeout]) : abortTimeout;
+
+    let response: Response;
+    try {
+      response = await fetch(endpoint, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: fetchSignal,
+      });
+    } catch (fetchErr: any) {
+      if (signal?.aborted) throw new Error('Task aborted');
+      if (abortTimeout.aborted) {
+        const timeoutErr: any = new Error(`OmniRoute connection timed out (${Math.round(connectTimeoutMs / 1000)}s) while waiting for gateway response`);
+        timeoutErr.status = 504;
+        throw timeoutErr;
+      }
+      throw fetchErr;
+    }
 
     if (!response.ok) {
       const errText = await response.text();
@@ -95,11 +266,15 @@ export class LLMClient {
       if (response.status === 400 && (errText.includes('ambiguous') || errText.includes('prefix') || errText.includes('provider'))) {
         hint = ' [OmniRoute Hint: โปรดระบุ Exact Provider Prefix เช่น in-ai/gemini-2.5-flash หรือ t3chat/gemini-2.5-flash]';
       }
-      throw new Error(`LLM API Error (${response.status}): ${errText}${hint}`);
+      const err: any = new Error(`LLM API Error (${response.status}): ${errText}${hint}`);
+      err.status = response.status;
+      throw err;
     }
 
     if (!response.body) {
-      throw new Error('LLM API returned empty response body');
+      const emptyErr: any = new Error('LLM API returned empty response body');
+      emptyErr.status = 502;
+      throw emptyErr;
     }
 
     const reader = response.body.getReader();
@@ -123,7 +298,11 @@ export class LLMClient {
       } catch {
         throw new Error('Provider returned malformed streaming data. Please retry or check the gateway response.');
       }
-      if (json.error) throw new Error(json.error.message || 'Provider stream failed');
+      if (json.error) {
+        const streamErr: any = new Error(json.error.message || 'Provider stream failed');
+        if (typeof json.error.code === 'number') streamErr.status = json.error.code;
+        throw streamErr;
+      }
       if (typeof json.model === 'string' && json.model.trim()) resolvedModel = json.model.trim();
       const choice = json.choices?.[0];
       if (!choice) return;
@@ -145,9 +324,15 @@ export class LLMClient {
         if (tc.function?.arguments) existing.args += tc.function.arguments;
       }
     };
+
     try {
       while (!completed) {
-        const { done, value } = await reader.read();
+        const { done, value } = await readWithTimeout(
+          reader.read(),
+          inactivityTimeoutMs,
+          `OmniRoute stream stalled: no data received for ${Math.round(inactivityTimeoutMs / 1000)}s`,
+          signal
+        );
         buffer += decoder.decode(value, { stream: !done });
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';

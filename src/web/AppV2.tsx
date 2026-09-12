@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, KeyboardEvent, ReactNode } from 'react';
 import {
   Activity,
+  AlertTriangle,
   Archive,
   ArrowUpRight,
   Bot,
@@ -20,6 +21,7 @@ import {
   FolderPlus,
   Gauge,
   GitBranch,
+  Globe,
   Loader2,
   MessageSquare,
   PanelLeft,
@@ -40,6 +42,8 @@ import {
   Target,
   Undo2,
   Users,
+  Volume2,
+  VolumeX,
   Wifi,
   WifiOff,
   X,
@@ -48,6 +52,19 @@ import type { AgentMode, AgentStatus, ContextUsage, Goal, GoalStatus, Message, P
 import { AlisaAvatar } from './components/AlisaAvatar';
 import { AlisaLogo } from './components/AlisaLogo';
 import { MarkdownRenderer } from './components/MarkdownRenderer';
+import { DiffViewerModal } from './components/DiffViewerModal';
+import { ChibiSwarmPanel } from './components/ChibiSwarmPanel';
+import { ConfettiCanvas } from './components/ConfettiCanvas';
+import { LiveWebPreview } from './components/LiveWebPreview';
+import { TemplateShowcaseModal } from './components/TemplateShowcaseModal';
+import {
+  playChime,
+  isSoundEnabled,
+  setSoundEnabled,
+  getSoundVolume,
+  setSoundVolume,
+  toggleSound,
+} from './audio/sound-fx';
 
 // The frontend is an internal Tauri webview. It is never a standalone browser client.
 const API_BASE = 'http://127.0.0.1:3101';
@@ -197,6 +214,9 @@ const SLASH_COMMANDS = [
   { id: 'new', label: '/new', detail: 'Start a new session' },
   { id: 'clear', label: '/clear', detail: 'Clear the local transcript' },
   { id: 'compact', label: '/compact', detail: 'Ask the agent to compact context' },
+  { id: 'diff', label: '/diff', detail: 'Review side-by-side visual diffs of changes' },
+  { id: 'preview', label: '/preview', detail: 'Toggle live in-app localhost web preview' },
+  { id: 'templates', label: '/templates', detail: 'Browse 1-click project starter templates' },
   { id: 'theme', label: '/theme', detail: 'Open appearance settings' },
   { id: 'settings', label: '/settings', detail: 'Open provider settings' },
 ] as const;
@@ -388,13 +408,36 @@ function TerminalPanel(props: {
   const [kind, setKind] = useState<'local' | 'ssh'>('local');
   const [ssh, setSsh] = useState<SshDraft>({ host: '', username: '', port: '22', identityFile: '', remoteCwd: '' });
   const [input, setInput] = useState('');
+  const outputRef = useRef<HTMLPreElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const active = props.sessions.find(session => session.id === props.activeSessionId);
 
   useEffect(() => setKind(props.preferredKind), [props.preferredKind]);
   useEffect(() => setInput(''), [props.activeSessionId]);
 
+  // Auto-start a local terminal session if drawer opens with zero sessions
+  useEffect(() => {
+    if (props.connected && props.sessions.length === 0) {
+      props.onStart('local', ssh);
+    }
+  }, [props.connected, props.sessions.length]);
+
+  // Auto-scroll output on updates
+  useEffect(() => {
+    if (outputRef.current) {
+      outputRef.current.scrollTop = outputRef.current.scrollHeight;
+    }
+  }, [active?.output]);
+
+  // Focus input when session is ready
+  useEffect(() => {
+    if (active && active.status !== 'exited' && active.status !== 'error') {
+      inputRef.current?.focus();
+    }
+  }, [active?.id, active?.status]);
+
   const send = () => {
-    if (!active || !input) return;
+    if (!active || !input.trim()) return;
     props.onSend(active.id, input + '\n');
     setInput('');
   };
@@ -403,8 +446,8 @@ function TerminalPanel(props: {
     <section className="terminal-drawer alisa-surface-enter absolute inset-x-3 bottom-3 z-[35] flex h-[min(500px,65vh)] min-h-[300px] flex-col overflow-hidden border border-[#292929] bg-[#050505]" aria-label="Integrated terminal">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-[#1a1a1a] px-3 text-[11px]">
         <Terminal className="h-3.5 w-3.5 text-[#8da4c6]" />
-        <span className="text-[#f2f2f2]">Terminal</span>
-        <span className="text-[#444]">local shell + SSH</span>
+        <span className="text-[#f2f2f2] font-medium">Terminal</span>
+        <span className="text-[#555]">local shell + SSH</span>
         <div className="ml-auto flex items-center gap-1">
           {props.sessions.map(session => (
             <button key={session.id} type="button" onClick={() => props.onSelect(session.id)} className={'max-w-[180px] truncate px-2 py-1 font-mono text-[10px] ' + (session.id === props.activeSessionId ? 'bg-[#151515] text-[#f2f2f2]' : 'text-[#666] hover:bg-[#101010] hover:text-[#aaa]')}>
@@ -439,7 +482,11 @@ function TerminalPanel(props: {
           <div className="mt-5 border-t border-[#1a1a1a] pt-3">
             <div className="mb-2 text-[10px] uppercase tracking-[0.16em] text-[#555]">Sessions · {props.sessions.length}</div>
             <div className="space-y-0.5">
-              {props.sessions.map(session => <button key={session.id} type="button" onClick={() => props.onSelect(session.id)} className={'flex w-full items-center gap-2 px-2 py-1.5 text-left text-[10px] ' + (session.id === props.activeSessionId ? 'bg-[#151515] text-[#f2f2f2]' : 'text-[#777] hover:bg-[#101010] hover:text-[#aaa]')}><span className={'terminal-status ' + (session.status === 'connected' ? 'terminal-success' : session.status === 'error' ? 'terminal-error' : session.status === 'connecting' ? 'terminal-running' : 'text-[#555]')}>{session.status === 'connected' ? '●' : session.status === 'error' ? '×' : session.status === 'connecting' ? '◐' : '○'}</span><span className="min-w-0 flex-1 truncate">{session.kind === 'ssh' ? `${session.username}@${session.host}` : 'local shell'}</span><span className="text-[9px] text-[#555]">{session.status}</span></button>)}
+              {props.sessions.map(session => <button key={session.id} type="button" onClick={() => props.onSelect(session.id)} className={'flex w-full items-center gap-2 px-2 py-1.5 text-left text-[10px] ' + (session.id === props.activeSessionId ? 'bg-[#151515] text-[#f2f2f2]' : 'text-[#777] hover:bg-[#101010] hover:text-[#aaa]')}>
+                <span className={'terminal-status ' + (session.status === 'connected' ? 'terminal-success' : session.status === 'error' ? 'terminal-error' : session.status === 'connecting' ? 'terminal-running' : 'text-[#555]')}>{session.status === 'connected' ? '●' : session.status === 'error' ? '×' : session.status === 'connecting' ? '◐' : '○'}</span>
+                <span className="min-w-0 flex-1 truncate">{session.kind === 'ssh' ? `${session.username}@${session.host}` : 'local shell'}</span>
+                <span className="text-[9px] text-[#555]">{session.status}</span>
+              </button>)}
               {!props.sessions.length && <div className="px-2 py-2 text-[10px] leading-5 text-[#555]">No terminal sessions yet.</div>}
             </div>
           </div>
@@ -449,11 +496,40 @@ function TerminalPanel(props: {
             <span className="text-[#444]">cwd</span><span className="min-w-0 truncate text-[#888]">{active?.cwd || (active ? 'connecting…' : 'select a session')}</span>
             {active && <><span className="text-[#333]">·</span><span className="text-[#555]">{active.kind === 'ssh' ? 'remote' : 'local'}</span><button type="button" onClick={() => props.onClear(active.id)} className="ml-auto text-[#555] hover:text-[#aaa]">clear</button><button type="button" onClick={() => props.onStop(active.id)} disabled={active.status === 'exited'} className="text-[#9b6f6f] hover:text-[#d98a8a] disabled:opacity-30">stop</button></>}
           </div>
-          <pre className="terminal-drawer-output min-h-0 flex-1 overflow-auto px-3 py-3 font-mono text-[11px] leading-5 text-[#b8b8b8]">{active ? (terminalTextForDisplay(active.output) || (active.status === 'connecting' ? 'Connecting…' : '(no output)')) : 'Start a local shell or connect to a remote host.'}</pre>
+          <pre ref={outputRef} className="terminal-drawer-output min-h-0 flex-1 overflow-auto px-3 py-3 font-mono text-[11px] leading-5 text-[#b8b8b8]">{active ? (terminalTextForDisplay(active.output) || (active.status === 'connecting' ? 'Connecting to shell…' : '(no output)')) : 'Starting local shell...'}</pre>
+
+          {active && (active.status === 'exited' || active.status === 'error') && (
+            <div className="flex items-center justify-between border-t border-rose-500/20 bg-rose-500/10 px-3 py-1.5 text-[11px] text-rose-300">
+              <span>Terminal session {active.status === 'error' ? 'encountered an error' : 'exited'}.</span>
+              <button
+                type="button"
+                onClick={() => props.onStart('local', ssh)}
+                className="flex items-center gap-1 rounded border border-rose-400/30 bg-rose-500/20 px-2 py-0.5 text-[10px] text-rose-100 hover:bg-rose-500/30 transition"
+              >
+                <RefreshCcw className="h-2.5 w-2.5" /> Restart Shell
+              </button>
+            </div>
+          )}
+
           <form onSubmit={event => { event.preventDefault(); send(); }} className="flex shrink-0 items-center gap-2 border-t border-[#1a1a1a] px-3 py-2">
-            <span className="text-[#8da4c6]">›</span>
-            <input value={input} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.ctrlKey && event.key.toLowerCase() === 'c' && active) { event.preventDefault(); props.onSend(active.id, '\u0003'); setInput(''); } }} disabled={!active || active.status === 'exited' || active.status === 'error'} placeholder={active ? 'type a command · Enter · Ctrl+C interrupt' : 'connect a terminal first'} className="min-w-0 flex-1 bg-transparent font-mono text-[11px] text-[#f2f2f2] outline-none placeholder:text-[#444] disabled:cursor-not-allowed" autoComplete="off" />
-            <button type="submit" disabled={!active || !input || active.status === 'exited' || active.status === 'error'} className="border border-[#303030] px-2 py-1 text-[10px] text-[#999] hover:bg-[#111] hover:text-[#f2f2f2] disabled:opacity-30">send</button>
+            <span className="text-[#8da4c6] font-mono text-sm font-bold">›</span>
+            <input
+              ref={inputRef}
+              value={input}
+              onChange={event => setInput(event.target.value)}
+              onKeyDown={event => {
+                if (event.ctrlKey && event.key.toLowerCase() === 'c' && active) {
+                  event.preventDefault();
+                  props.onSend(active.id, '\u0003');
+                  setInput('');
+                }
+              }}
+              disabled={!active || active.status === 'exited' || active.status === 'error'}
+              placeholder={active ? (active.status === 'exited' ? 'Session exited · click Restart Shell above' : 'type a command · Enter · Ctrl+C to interrupt') : 'Starting shell session…'}
+              className="min-w-0 flex-1 bg-transparent font-mono text-[11px] text-[#f2f2f2] outline-none placeholder:text-[#444] disabled:cursor-not-allowed"
+              autoComplete="off"
+            />
+            <button type="submit" disabled={!active || !input.trim() || active.status === 'exited' || active.status === 'error'} className="border border-[#303030] px-2.5 py-1 text-[10px] text-[#999] hover:bg-[#111] hover:text-[#f2f2f2] disabled:opacity-30 transition">send</button>
           </form>
         </div>
       </div>
@@ -544,8 +620,16 @@ const ToolCard = memo(function ToolCard(props: { tool: ToolRun }) {
   );
 });
 
-const MessageBubble = memo(function MessageBubble(props: { message: Message; tools: ToolRun[]; messages?: Message[]; isStreaming?: boolean }) {
+const MessageBubble = memo(function MessageBubble(props: {
+  message: Message;
+  tools: ToolRun[];
+  messages?: Message[];
+  isStreaming?: boolean;
+  onRetryTask?: () => void;
+  onOpenModelMenu?: () => void;
+}) {
   const isUser = props.message.role === 'user';
+  const isError = Boolean(props.message.metadata?.error);
   const relatedTools = (props.message.tool_calls || []).map(call => {
     const active = props.tools.find(tool => tool.toolCallId === call.id);
     if (active) return active;
@@ -555,15 +639,51 @@ const MessageBubble = memo(function MessageBubble(props: { message: Message; too
     return { toolName: call.function.name, toolCallId: call.id, args, result: result?.content, error: result?.metadata?.error ? result.content : undefined, status: result?.metadata?.error ? 'error' : 'success' } as ToolRun;
   });
   return (
-    <div className={'terminal-message ' + (isUser ? 'terminal-user' : 'terminal-assistant')}>
+    <div className={'terminal-message ' + (isUser ? 'terminal-user' : isError ? 'terminal-error-message' : 'terminal-assistant')}>
       <div className="terminal-message-head flex items-center gap-2 text-[10px] uppercase tracking-[0.14em]">
-        <span className="terminal-message-mark">{isUser ? '┃' : props.isStreaming ? '●' : ' '}</span>
+        <span className="terminal-message-mark">{isUser ? '┃' : isError ? '!' : props.isStreaming ? '●' : ' '}</span>
         <span>{isUser ? 'You' : 'Alisa'}</span>
         {!isUser && props.message.metadata?.model && <span className="max-w-[260px] truncate normal-case tracking-normal text-slate-600" title={props.message.metadata.model}>via {props.message.metadata.model}</span>}
         <span className="text-slate-700">{formatRelativeTime(props.message.timestamp)}</span>
       </div>
       <div className="terminal-message-body text-sm leading-6">
-        {isUser ? <div className="whitespace-pre-wrap">{props.message.content}</div> : <MarkdownRenderer content={props.message.content || (relatedTools.length ? '' : '…')} />}
+        {isUser ? (
+          <div className="whitespace-pre-wrap">{props.message.content}</div>
+        ) : isError ? (
+          <div className="my-2 rounded-xl border border-rose-500/30 bg-rose-950/20 p-4 text-xs text-rose-200 shadow-lg">
+            <div className="flex items-center gap-2 font-medium text-rose-300">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400" />
+              <span>เกิดข้อผิดพลาดในการเชื่อมต่อโมเดล / OmniRoute Gateway</span>
+            </div>
+            <div className="mt-2 font-mono text-[11px] leading-5 text-slate-300 break-words">
+              {props.message.content.replace(/^\[Error\]\s*/, '')}
+            </div>
+            <div className="mt-3.5 flex flex-wrap items-center gap-2.5">
+              {props.onRetryTask && (
+                <button
+                  type="button"
+                  onClick={props.onRetryTask}
+                  className="flex items-center gap-1.5 rounded-lg border border-rose-400/40 bg-rose-500/15 px-3 py-1.5 text-xs font-medium text-rose-200 transition hover:bg-rose-500/25 active:scale-95"
+                >
+                  <RefreshCcw className="h-3.5 w-3.5" />
+                  ลองใหม่อีกครั้ง (Retry)
+                </button>
+              )}
+              {props.onOpenModelMenu && (
+                <button
+                  type="button"
+                  onClick={props.onOpenModelMenu}
+                  className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-300 transition hover:bg-white/10"
+                >
+                  <Settings2 className="h-3.5 w-3.5" />
+                  เปลี่ยน Model / Route
+                </button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <MarkdownRenderer content={props.message.content || (relatedTools.length ? '' : '…')} />
+        )}
         {relatedTools.map(tool => <ToolCard key={tool.toolCallId} tool={tool} />)}
       </div>
     </div>
@@ -859,7 +979,7 @@ export default function AppV2() {
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [approval, setApproval] = useState<ApprovalRequest | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window === 'undefined' || window.innerWidth >= 1024);
-  const [inspectorOpen, setInspectorOpen] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 1280);
+  const [inspectorOpen, setInspectorOpen] = useState(true);
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('chats');
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('plan');
   const [search, setSearch] = useState('');
@@ -867,6 +987,9 @@ export default function AppV2() {
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [fileSearch, setFileSearch] = useState('');
   const [git, setGit] = useState<GitState | null>(null);
+  const [selectedDiffFile, setSelectedDiffFile] = useState<string | null>(null);
+  const [webPreviewOpen, setWebPreviewOpen] = useState(false);
+  const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [workspaceError, setWorkspaceError] = useState('');
   const [selectedFile, setSelectedFile] = useState('');
   const [openFiles, setOpenFiles] = useState<string[]>([]);
@@ -899,10 +1022,9 @@ export default function AppV2() {
   const [autoFollow, setAutoFollow] = useState(true);
   const [skills, setSkills] = useState<string[]>(DEFAULT_SKILLS);
   const [capabilities, setCapabilities] = useState<CapabilityStatusView>({});
-  const [showYurachiCompanion, setShowYurachiCompanion] = useState(() => {
-    if (typeof window === 'undefined') return true;
-    try { return window.localStorage.getItem('alisa.showYurachiCompanion') !== '0'; } catch { return true; }
-  });
+  const [showYurachiCompanion, setShowYurachiCompanion] = useState(true);
+  const [soundEnabledState, setSoundEnabledState] = useState(() => isSoundEnabled());
+  const [soundVolumeState, setSoundVolumeState] = useState(() => getSoundVolume());
   const [workspaceTransition, setWorkspaceTransition] = useState<{ path: string; stage: 'opening' | 'ready'; closing?: boolean } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const bootstrapInFlight = useRef(false);
@@ -928,6 +1050,10 @@ export default function AppV2() {
   useEffect(() => {
     try { window.localStorage.setItem('alisa.showYurachiCompanion', showYurachiCompanion ? '1' : '0'); } catch { /* Webview storage can be unavailable in private mode. */ }
   }, [showYurachiCompanion]);
+
+  useEffect(() => {
+    try { window.localStorage.setItem('alisa.inspectorOpen', inspectorOpen ? '1' : '0'); } catch { /* Webview storage can be unavailable in private mode. */ }
+  }, [inspectorOpen]);
 
   useEffect(() => {
     const preloadTimer = window.setTimeout(() => {
@@ -1062,6 +1188,21 @@ export default function AppV2() {
     }, 180);
   }, [loadFiles]);
 
+  const handleDiscardFile = useCallback(async (filePath: string) => {
+    try {
+      const res = await api<{ success: boolean }>('/api/git/discard-file', {
+        method: 'POST',
+        body: JSON.stringify({ filePath }),
+      });
+      if (res.success) {
+        notify(`Discarded modifications in ${filePath}`);
+        await loadFiles();
+      }
+    } catch (error) {
+      notify(errorText(error));
+    }
+  }, [loadFiles, notify]);
+
   const loadSessionList = useCallback(async (query = '', includeArchived = showArchived) => {
     try {
       if (query.trim()) {
@@ -1158,6 +1299,15 @@ export default function AppV2() {
       if (data.status !== 'waiting_approval') setApproval(null);
       return;
     }
+    if (data.type === 'stream_reset') {
+      resetStreaming();
+      return;
+    }
+    if (data.type === 'retry_attempt') {
+      resetStreaming();
+      addActivity({ kind: 'status', label: `OmniRoute retry ${data.attempt}/${data.maxRetries}`, detail: data.error });
+      return;
+    }
     if (data.type === 'token_stream' || data.type === 'token') {
       queueStreamingPaint('content', data.delta || data.token || '');
       return;
@@ -1245,6 +1395,9 @@ export default function AppV2() {
       return;
     }
     if (data.type === 'error') {
+      resetStreaming();
+      setToolRuns([]);
+      setApproval(null);
       setStatus('error');
       setStatusDetail(data.message || 'Request failed');
       addActivity({ kind: 'error', label: 'Error', detail: data.message });
@@ -1594,6 +1747,22 @@ export default function AppV2() {
       window.requestAnimationFrame(() => textareaRef.current?.focus());
       return;
     }
+    if (commandId === 'diff') {
+      if (changedFiles.length > 0) {
+        setSelectedDiffFile(changedFiles[0]);
+      } else {
+        notify('Working tree clean — no modified files to diff');
+      }
+      return;
+    }
+    if (commandId === 'preview') {
+      setWebPreviewOpen(prev => !prev);
+      return;
+    }
+    if (commandId === 'templates') {
+      setTemplateModalOpen(true);
+      return;
+    }
     if (commandId === 'theme') {
       notify('Theme is fixed to the pure-black terminal workspace');
       return;
@@ -1633,6 +1802,20 @@ export default function AppV2() {
     addActivity({ kind: 'system', label: 'Task started', detail: prompt });
     wsRef.current.send(JSON.stringify({ type: 'start_task', sessionId: sessionIdRef.current, prompt, skills, mode, model, swarm: swarmEnabled, yolo: yoloMode }));
   };
+
+  const retryLastPrompt = useCallback(() => {
+    const lastUserMsg = [...messages].reverse().find(item => item.role === 'user');
+    if (!lastUserMsg || !lastUserMsg.content.trim()) return;
+    const prompt = lastUserMsg.content.trim();
+    if (busy || !sessionIdRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    const optimistic: Message = { id: 'local_' + Date.now(), role: 'user', content: prompt, timestamp: Date.now() };
+    setMessages(previous => [...previous, optimistic]);
+    setAutoFollow(true);
+    setStatus('thinking');
+    setStatusDetail('Retrying prompt…');
+    addActivity({ kind: 'system', label: 'Task retried', detail: prompt });
+    wsRef.current.send(JSON.stringify({ type: 'start_task', sessionId: sessionIdRef.current, prompt, skills, mode, model, swarm: swarmEnabled, yolo: yoloMode }));
+  }, [messages, busy, skills, mode, model, swarmEnabled, yoloMode, addActivity]);
 
   const stopTask = () => {
     if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ type: 'abort_task' }));
@@ -1713,6 +1896,8 @@ export default function AppV2() {
 
   const sendTerminalInput = (sessionId: string, data: string) => {
     if (!data) return;
+    const isInterrupt = data.startsWith('\u0003');
+    queueTerminalOutput(sessionId, isInterrupt ? '^C\n' : `› ${data}`);
     sendTerminalMessage({ type: 'terminal_input', sessionId, data });
   };
 
@@ -1907,7 +2092,7 @@ export default function AppV2() {
     { id: 'change-agent', label: 'Change agent', detail: 'Cycle Auto, Code, Plan, and Ask', run: () => setMode(MODES[(MODES.findIndex(item => item.id === mode) + 1) % MODES.length].id) },
     { id: 'toggle-swarm', label: swarmEnabled ? 'Use single agent' : 'Enable agent swarm', detail: 'Run Explorer, Planner, Builder, and Reviewer', run: () => void toggleSwarm() },
     { id: 'toggle-yolo', label: yoloMode ? 'Disable YOLO mode' : 'Enable YOLO mode', detail: 'Run approval-gated tools without confirmation prompts', run: () => void toggleYolo() },
-    { id: 'toggle-character', label: showYurachiCompanion ? 'Hide Yurachi companion' : 'Show Yurachi companion', detail: 'Toggle the optional animated pose layer', run: () => { const next = !showYurachiCompanion; setShowYurachiCompanion(next); notify(next ? 'Yurachi companion shown' : 'Yurachi companion hidden'); } },
+    { id: 'toggle-character', label: showYurachiCompanion ? 'Hide Yurachi companion' : 'Show Yurachi companion in right menu', detail: 'Toggle the animated companion docked in the right menu', run: () => { const next = !showYurachiCompanion; setShowYurachiCompanion(next); if (next && !inspectorOpen) setInspectorOpen(true); notify(next ? 'Yurachi companion docked in right menu' : 'Yurachi companion hidden'); } },
     { id: 'open-goal', label: 'Open goal', detail: 'Set the persistent session goal and progress', run: () => { setInspectorTab('goal'); setInspectorOpen(true); } },
     { id: 'open-files', label: 'Open project files', detail: 'Browse files or open the VSCode-style editor', run: () => { setSidebarTab('files'); setSidebarOpen(true); } },
     { id: 'open-terminal', label: 'Open terminal', detail: 'Start a local shell or connect through SSH', run: () => { setTerminalPreferredKind('local'); setTerminalOpen(true); } },
@@ -2111,7 +2296,25 @@ export default function AppV2() {
               )}
             </div>
           </div>
-          <IconButton label={showYurachiCompanion ? 'Hide Yurachi companion' : 'Show Yurachi companion'} active={showYurachiCompanion} onClick={() => setShowYurachiCompanion(value => !value)}><Sparkles className="h-4 w-4" /></IconButton>
+          <IconButton
+            label={showYurachiCompanion ? 'Hide Yurachi companion' : 'Show Yurachi companion in right menu'}
+            active={showYurachiCompanion && inspectorOpen}
+            onClick={() => {
+              if (!showYurachiCompanion) {
+                setShowYurachiCompanion(true);
+                setInspectorOpen(true);
+                notify('Yurachi companion docked in right menu');
+              } else if (!inspectorOpen) {
+                setInspectorOpen(true);
+                notify('Opened right menu with Yurachi companion');
+              } else {
+                setShowYurachiCompanion(false);
+                notify('Yurachi companion hidden');
+              }
+            }}
+          >
+            <Sparkles className="h-4 w-4" />
+          </IconButton>
           <IconButton label="Open integrated terminal · Ctrl/Cmd + `" active={terminalOpen} onClick={() => setTerminalOpen(value => !value)}><Terminal className="h-4 w-4" /></IconButton>
           <IconButton label="Open project files" onClick={() => { setSidebarOpen(true); setSidebarTab('files'); }}><FolderOpen className="h-4 w-4" /></IconButton>
           <IconButton label="Provider and workspace settings" onClick={() => openSettings()}><Settings2 className="h-4 w-4" /></IconButton>
@@ -2192,9 +2395,38 @@ export default function AppV2() {
               <div className="truncate text-[10px] text-slate-600">{shortPath(workspaceDir, 72)}</div>
             </div>
             <div className="flex items-center gap-1.5">
-              {showYurachiCompanion && (busy || lastRun) && <div className="yurachi-companion-mini" aria-live="polite" aria-label={'Yurachi ' + companion.label}><img key={companionPose} src={companion.src} alt="" /><span className="hidden xl:inline">{companion.label}</span></div>}
+              <button
+                type="button"
+                onClick={() => setWebPreviewOpen(prev => !prev)}
+                className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[10px] font-medium transition ${
+                  webPreviewOpen
+                    ? 'bg-sky-500/25 text-sky-200 border border-sky-500/30'
+                    : 'bg-white/[0.04] text-slate-400 hover:text-slate-200 hover:bg-white/[0.08]'
+                }`}
+                title="Toggle live in-app localhost web preview (/preview)"
+              >
+                <Globe className="h-3 w-3 text-sky-400" />
+                <span className="hidden sm:inline">Live Preview</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !showYurachiCompanion;
+                  setShowYurachiCompanion(next);
+                  notify(next ? 'Yurachi companion shown' : 'Yurachi companion hidden');
+                }}
+                className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[10px] font-medium transition ${
+                  showYurachiCompanion
+                    ? 'bg-pink-500/20 text-pink-200 border border-pink-500/35 shadow-[0_0_10px_rgba(239,143,189,0.2)]'
+                    : 'bg-white/[0.04] text-slate-400 hover:text-slate-200 hover:bg-white/[0.08]'
+                }`}
+                title="Toggle Yurachi Chibi & Swarm Panel in bottom-right (/character)"
+              >
+                <span className="text-pink-400">✦</span>
+                <span>Yurachi</span>
+              </button>
               {git?.branch && <span className="hidden items-center gap-1 rounded-lg bg-white/[0.04] px-2 py-1 text-[10px] text-slate-500 sm:flex"><GitBranch className="h-3 w-3" />{git.branch}</span>}
-              {changedFiles.length > 0 && <button type="button" onClick={() => { setInspectorTab('changes'); setInspectorOpen(true); }} className="rounded-lg bg-amber-300/10 px-2 py-1 text-[10px] text-amber-200 hover:bg-amber-300/15">{changedFiles.length} change{changedFiles.length === 1 ? '' : 's'}</button>}
+              {changedFiles.length > 0 && <button type="button" onClick={() => setSelectedDiffFile(changedFiles[0])} className="rounded-lg bg-amber-300/10 px-2 py-1 text-[10px] text-amber-200 hover:bg-amber-300/15" title="Review side-by-side diff">{changedFiles.length} change{changedFiles.length === 1 ? '' : 's'}</button>}
               {!sidebarOpen && <IconButton label="Open chats panel" onClick={() => setSidebarOpen(true)}><PanelLeft className="h-4 w-4" /></IconButton>}
             </div>
           </div>
@@ -2203,24 +2435,33 @@ export default function AppV2() {
               {workspaceError && <div className="flex items-start gap-2 rounded-xl border border-rose-300/15 bg-rose-300/[0.07] px-3 py-2 text-xs text-rose-200"><WifiOff className="mt-0.5 h-4 w-4 shrink-0" /><span>{workspaceError}</span></div>}
               {!chatMessages.length && !streamingContent && (
                 <div className="terminal-empty flex min-h-[45vh] flex-col items-center justify-center text-center">
-                  {showYurachiCompanion && <div className="yurachi-companion" aria-live="polite"><img key={companionPose} src={companion.src} alt={'Yurachi ' + companion.label} /><div className="yurachi-companion-caption">YURACHI · {companion.label} <span>· /character to hide</span></div></div>}
-                  <div className="mb-3 text-[11px] uppercase tracking-[0.28em] text-slate-600">ALISA CODE · V2</div>
+                  <button
+                    type="button"
+                    onClick={() => setTemplateModalOpen(true)}
+                    className="mt-5 inline-flex items-center gap-2 rounded-full border border-pink-500/30 bg-pink-500/10 px-4 py-1.5 text-xs font-semibold text-pink-200 hover:bg-pink-500/20 transition shadow-[0_2px_15px_rgba(239,143,189,0.25)] hover:scale-105"
+                  >
+                    <Sparkles className="h-3.5 w-3.5 text-pink-400" />
+                    <span>Start New Project from Template ✦</span>
+                  </button>
+                  <div className="mt-5 mb-3 text-[11px] uppercase tracking-[0.28em] text-slate-600">ALISA CODE · V2</div>
                   <h2 className="text-lg font-medium tracking-tight text-slate-200">{projectName || 'Project workspace'}</h2>
                   <p className="mt-2 max-w-md text-xs leading-6 text-slate-600">terminal-first AI coding workspace · type a prompt or / for commands</p>
                   <div className="terminal-command-hints mt-7 grid gap-x-8 gap-y-1 text-left text-[11px] sm:grid-cols-2">
                     {[
                       ['/help', 'show commands'],
+                      ['/diff', 'review visual file diffs'],
+                      ['/preview', 'open live web preview'],
+                      ['/templates', '1-click project starters'],
                       ['/models', 'select model route'],
                       ['/terminal', 'open local / SSH terminal'],
-                      ['/sessions', 'open sessions'],
                       ['/character', 'show or hide Yurachi'],
                       ['@file', 'reference a project file'],
                     ].map(([title, detail]) => <button key={title} type="button" onClick={() => { setInput(title.startsWith('/') ? title : '@'); textareaRef.current?.focus(); }} className="terminal-command-hint text-left transition hover:text-slate-200"><span className="text-slate-300">{title}</span><span className="ml-3 text-slate-700">{detail}</span></button>)}
                   </div>
                 </div>
               )}
-              {chatMessages.map(message => <MessageBubble key={message.id} message={message} messages={messages} tools={toolRuns} />)}
-              {streamingContent && <MessageBubble message={{ id: 'streaming', role: 'assistant', content: streamingContent, timestamp: Date.now() }} messages={messages} tools={toolRuns} isStreaming />}
+              {chatMessages.map(message => <MessageBubble key={message.id} message={message} messages={messages} tools={toolRuns} onRetryTask={retryLastPrompt} onOpenModelMenu={() => modelInputRef.current?.focus()} />)}
+              {streamingContent && <MessageBubble message={{ id: 'streaming', role: 'assistant', content: streamingContent, timestamp: Date.now() }} messages={messages} tools={toolRuns} isStreaming onRetryTask={retryLastPrompt} onOpenModelMenu={() => modelInputRef.current?.focus()} />}
               {streamingThought && <div className="terminal-thought ml-5 border-l border-violet-300/20 pl-3 text-xs text-violet-200/60"><span className="mr-2 text-[10px] uppercase tracking-widest text-violet-300/50">Thought</span>{streamingThought}</div>}
               {busy && !streamingContent && !streamingThought && <div className="terminal-working text-xs text-slate-500"><span className="terminal-status terminal-running">●</span><span>{statusDetail || 'Working…'}</span></div>}
               {approval && (
@@ -2246,6 +2487,34 @@ export default function AppV2() {
               </div>
             </form>
           </div>
+          {/* If inspector is closed, keep Chibi visible at bottom-right corner as a floating companion */}
+          {!inspectorOpen && showYurachiCompanion && (
+            <ChibiSwarmPanel
+              docked={false}
+              status={status}
+              statusDetail={statusDetail}
+              busy={busy}
+              lastRunStatus={lastRun?.status}
+              companionPose={companionPose}
+              companionSrc={companion.src}
+              companionLabel={companion.label}
+              toolName={toolRuns.at(-1)?.toolName}
+              activeGoal={goal?.title}
+              swarmEnabled={swarmEnabled}
+              swarmAgents={swarmAgents}
+              swarmPhase={swarmPhase}
+              onToggleSwarm={() => setSwarmEnabled(prev => !prev)}
+              onOpenSwarmInspector={() => {
+                setInspectorOpen(true);
+                setInspectorTab('agents');
+              }}
+              onOpenSettings={() => openSettings()}
+              onClose={() => {
+                setShowYurachiCompanion(false);
+                notify('Yurachi companion hidden');
+              }}
+            />
+          )}
         </main>
 
         <aside className={'alisa-inspector flex shrink-0 flex-col overflow-hidden border-l border-white/[0.08] bg-[#11151d]/90 transition-[width,opacity] duration-200 max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:z-30 max-md:shadow-2xl ' + (inspectorOpen ? 'w-[310px] opacity-100' : 'w-0 opacity-0')}>
@@ -2260,9 +2529,112 @@ export default function AppV2() {
             {inspectorTab === 'goal' && <div className="space-y-3"><div className="flex items-center gap-2 text-xs font-medium text-slate-200"><Target className="h-3.5 w-3.5 text-violet-200" />Persistent goal</div><p className="text-[10px] leading-4 text-slate-600">This goal follows the session and is included in every agent context.</p><input value={goalDraftTitle} onChange={event => setGoalDraftTitle(event.target.value)} disabled={busy || goalSaving} placeholder="Ship the new editor experience" className="w-full rounded-lg border border-white/[0.09] bg-black/20 px-2.5 py-2 text-xs text-slate-200 outline-none focus:border-violet-200/30 disabled:opacity-50" /><textarea value={goalDraftDescription} onChange={event => setGoalDraftDescription(event.target.value)} disabled={busy || goalSaving} rows={3} placeholder="What does done look like?" className="w-full resize-none rounded-lg border border-white/[0.09] bg-black/20 px-2.5 py-2 text-[11px] leading-5 text-slate-300 outline-none focus:border-violet-200/30 disabled:opacity-50" /><div className="grid grid-cols-2 gap-2"><label className="text-[10px] text-slate-600">Status<select value={goalDraftStatus} onChange={event => setGoalDraftStatus(event.target.value as GoalStatus)} disabled={busy || goalSaving} className="mt-1 w-full rounded-lg border border-white/[0.09] bg-black/20 px-2 py-2 text-[11px] text-slate-300 outline-none disabled:opacity-50"><option value="active">Active</option><option value="paused">Paused</option><option value="blocked">Blocked</option><option value="completed">Completed</option></select></label><label className="text-[10px] text-slate-600">Progress · {goalDraftProgress}%<input type="range" min="0" max="100" value={goalDraftProgress} onChange={event => setGoalDraftProgress(event.target.value)} disabled={busy || goalSaving} className="mt-3 w-full accent-violet-300 disabled:opacity-50" /></label></div><div className="flex gap-2"><button type="button" onClick={() => void saveGoal()} disabled={busy || goalSaving || !goalDraftTitle.trim()} className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-violet-300/15 px-3 py-2 text-[11px] text-violet-100 hover:bg-violet-300/25 disabled:opacity-40"><Save className="h-3.5 w-3.5" />{goalSaving ? 'Saving…' : 'Save goal'}</button><button type="button" onClick={() => void clearGoal()} disabled={busy || goalSaving || !goal} className="rounded-lg border border-white/[0.08] px-3 py-2 text-[11px] text-slate-500 hover:text-slate-200 disabled:opacity-40">Clear</button></div>{goal?.steps?.length ? <div className="border-t border-white/[0.07] pt-3"><div className="mb-2 text-[10px] uppercase tracking-[0.15em] text-slate-600">Goal steps</div><PlanList items={goal.steps} compact /></div> : <div className="border-l border-violet-300/20 pl-3 text-[10px] leading-5 text-slate-600">The Planner or Builder can add milestone steps with update_goal.</div>}</div>}
             {inspectorTab === 'agents' && <div className="space-y-3"><div className="flex items-center gap-2 text-xs font-medium text-slate-200"><Users className="h-3.5 w-3.5 text-violet-200" />Agent swarm</div><div className="flex items-center justify-between text-[10px] text-slate-600"><span>{swarmEnabled ? 'Staged execution · shared workspace' : 'Single agent execution'}</span><span>{swarmAgents.filter(agent => agent.status === 'done').length}/{swarmAgents.length || 4}</span></div>{swarmAgents.length ? <div className="space-y-1">{swarmAgents.map(agent => <div key={agent.id} className="border-l border-white/[0.08] px-2.5 py-2"><div className="flex items-center gap-2 text-[11px] text-slate-300"><span className={'terminal-status ' + (agent.status === 'done' ? 'terminal-success' : agent.status === 'error' ? 'terminal-error' : agent.status === 'working' ? 'terminal-running' : 'text-slate-700')}>{agent.status === 'done' ? '✓' : agent.status === 'error' ? '×' : agent.status === 'working' ? '●' : '○'}</span><Bot className="h-3.5 w-3.5 text-slate-600" /><span className="flex-1">{agent.label}</span><span className="text-[9px] uppercase tracking-[0.12em] text-slate-700">{agent.status}</span></div>{agent.detail && <div className="mt-1 truncate pl-7 text-[9px] text-slate-600">{agent.detail}</div>}{agent.durationMs !== undefined && <div className="mt-1 pl-7 text-[9px] text-slate-700">{formatDuration(agent.durationMs)}</div>}</div>)}</div> : <div className="border-l border-white/[0.08] pl-3 text-[10px] leading-5 text-slate-600">Enable Swarm to run Explorer → Planner → Builder → Reviewer in one task. Each role reports into this session.</div>}{swarmPhase && <div className="border-t border-white/[0.07] pt-3 text-[10px] text-slate-600">{swarmPhase}</div>}</div>}
             {inspectorTab === 'context' && <div className="space-y-4"><div className="flex items-center gap-2 text-xs font-medium text-slate-200"><Gauge className="h-3.5 w-3.5 text-sky-200" />Context window</div><div><div className="flex items-center justify-between text-[10px] text-slate-500"><span>{formatTokenCount(contextUsage.usedTokens)} used</span><span>{formatTokenCount(contextUsage.maxTokens)} max</span></div><div className="mt-2 h-1 bg-white/[0.08]"><div className={'h-full ' + (contextUsage.percent >= 85 ? 'bg-rose-300' : contextUsage.percent >= 65 ? 'bg-amber-300' : 'bg-sky-300')} style={{ width: Math.min(100, contextUsage.percent) + '%' }} /></div><div className="mt-2 text-right font-mono text-[11px] text-slate-300">{contextUsage.percent}%</div></div><div className="border-t border-white/[0.07] pt-3"><div className="text-[10px] uppercase tracking-[0.15em] text-slate-600">Model route</div><div className="mt-1 break-all font-mono text-[11px] text-slate-300">{model || 'Not configured'}</div><div className="mt-3 text-[10px] uppercase tracking-[0.15em] text-slate-600">Window source</div><div className="mt-1 text-[10px] leading-5 text-slate-500">{modelContextWindows[model] ? 'Provider model metadata' : 'Safe estimate until provider metadata is loaded'}</div></div><div className="border-l border-sky-300/20 pl-3 text-[10px] leading-5 text-slate-600">Context usage is an estimate based on the prepared transcript and tool calls. Automatic compaction protects long-running sessions.</div></div>}
-            {inspectorTab === 'changes' && <div className="space-y-3"><div className="flex items-center justify-between"><div className="flex items-center gap-2 text-xs font-medium text-slate-200"><Code2 className="h-3.5 w-3.5 text-amber-200" />Changes</div><IconButton label="Refresh changes" onClick={() => void loadFiles()}><RefreshCcw className="h-3.5 w-3.5" /></IconButton></div>{changedFiles.length ? <div className="space-y-1">{changedFiles.map(file => <button key={file} type="button" onClick={() => void openFile(file)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-slate-400 hover:bg-white/[0.06] hover:text-white"><FileCode2 className="h-3.5 w-3.5 text-amber-200" /><span className="min-w-0 flex-1 truncate">{file}</span><ArrowUpRight className="h-3 w-3 text-slate-600" /></button>)}</div> : <div className="rounded-xl border border-dashed border-white/10 px-3 py-5 text-center text-xs text-slate-600">Working tree clean</div>}{git?.diff && <details className="rounded-xl border border-white/[0.07] bg-black/20"><summary className="cursor-pointer px-3 py-2 text-[10px] text-slate-500">View diff</summary><pre className="max-h-80 overflow-auto border-t border-white/[0.06] p-3 font-mono text-[10px] leading-5 text-slate-500">{git.diff}</pre></details>}<button type="button" onClick={async () => { try { const result = await api<{ success: boolean; message?: string }>('/api/rollback', { method: 'POST' }); notify(result.message || (result.success ? 'Rolled back latest changes' : 'Nothing to roll back')); await loadFiles(); } catch (error) { notify(errorText(error)); } }} className="flex w-full items-center justify-center gap-2 rounded-xl border border-white/[0.08] px-3 py-2 text-xs text-slate-400 hover:bg-white/[0.06] hover:text-white"><Undo2 className="h-3.5 w-3.5" /> Roll back latest agent edit</button></div>}
+            {inspectorTab === 'changes' && <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-xs font-medium text-slate-200">
+                  <Code2 className="h-3.5 w-3.5 text-amber-200" />
+                  <span>Changes</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  {changedFiles.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedDiffFile(changedFiles[0])}
+                      className="rounded-lg bg-sky-500/20 px-2 py-1 text-[10px] font-medium text-sky-200 hover:bg-sky-500/30 transition"
+                      title="Review side-by-side diff"
+                    >
+                      Side-by-Side Diff
+                    </button>
+                  )}
+                  <IconButton label="Refresh changes" onClick={() => void loadFiles()}><RefreshCcw className="h-3.5 w-3.5" /></IconButton>
+                </div>
+              </div>
+              {changedFiles.length ? (
+                <div className="space-y-1">
+                  {changedFiles.map(file => (
+                    <div key={file} className="flex items-center gap-1 rounded-lg bg-white/[0.02] p-1 hover:bg-white/[0.05]">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedDiffFile(file)}
+                        className="flex min-w-0 flex-1 items-center gap-2 px-1.5 py-1 text-left text-xs text-slate-300 hover:text-white"
+                        title="Click to view visual side-by-side diff"
+                      >
+                        <FileCode2 className="h-3.5 w-3.5 text-amber-300 shrink-0" />
+                        <span className="min-w-0 flex-1 truncate font-mono text-[11px]">{file}</span>
+                        <span className="shrink-0 text-[10px] text-sky-400 font-medium">Diff</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void openFile(file)}
+                        className="rounded p-1 text-slate-500 hover:text-slate-200 hover:bg-white/10"
+                        title="Open in Code Editor"
+                      >
+                        <ArrowUpRight className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-dashed border-white/10 px-3 py-5 text-center text-xs text-slate-600">
+                  Working tree clean
+                </div>
+              )}
+              {git?.diff && (
+                <details className="rounded-xl border border-white/[0.07] bg-black/20">
+                  <summary className="cursor-pointer px-3 py-2 text-[10px] text-slate-500 hover:text-slate-300">
+                    Raw Git Diff
+                  </summary>
+                  <pre className="max-h-80 overflow-auto border-t border-white/[0.06] p-3 font-mono text-[10px] leading-5 text-slate-500 select-text">
+                    {git.diff}
+                  </pre>
+                </details>
+              )}
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    const result = await api<{ success: boolean; message?: string }>('/api/rollback', { method: 'POST' });
+                    notify(result.message || (result.success ? 'Rolled back latest changes' : 'Nothing to roll back'));
+                    await loadFiles();
+                  } catch (error) {
+                    notify(errorText(error));
+                  }
+                }}
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-white/[0.08] px-3 py-2 text-xs text-slate-400 hover:bg-white/[0.06] hover:text-white transition"
+              >
+                <Undo2 className="h-3.5 w-3.5" />
+                <span>Roll back latest agent edit</span>
+              </button>
+            </div>}
             {inspectorTab === 'activity' && <div className="space-y-3"><div className="flex items-center gap-2 text-xs font-medium text-slate-200"><Activity className="h-3.5 w-3.5 text-sky-200" />Activity</div>{lastRun && <div className="border-l border-emerald-300/40 px-2.5 py-2"><div className="flex items-start gap-2 text-[11px] text-emerald-200"><span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-300" /><span className="min-w-0 flex-1">Task {runLabel(lastRun.status).toLowerCase()}</span><span className="shrink-0 text-[9px] text-slate-700">{formatRelativeTime(lastRun.completedAt)}</span></div><div className="mt-1 pl-3.5 font-mono text-[9px] text-slate-500">{lastRun.detail || runLabel(lastRun.status)}{formatDuration(lastRun.durationMs) ? ' · ' + formatDuration(lastRun.durationMs) : ''}</div></div>}<div className="space-y-1">{activity.map(entry => <div key={entry.id} className="rounded-lg px-2.5 py-2 hover:bg-white/[0.04]"><div className="flex items-start gap-2 text-[11px] text-slate-400"><span className={'mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ' + (entry.kind === 'error' ? 'bg-rose-300' : entry.kind === 'tool' ? 'bg-amber-300' : 'bg-sky-300')} /><span className="min-w-0 flex-1">{entry.label}</span><span className="shrink-0 text-[9px] text-slate-700">{formatRelativeTime(entry.timestamp)}</span></div>{entry.detail && <div className="mt-1 truncate pl-3.5 font-mono text-[9px] text-slate-600">{entry.detail}</div>}</div>)}{!activity.length && !lastRun && <div className="py-8 text-center text-xs text-slate-600">No activity yet</div>}</div><div className="border-t border-white/[0.07] pt-3"><div className="mb-2 flex items-center gap-2 text-[10px] uppercase tracking-[0.15em] text-slate-600"><Terminal className="h-3 w-3" />Direct terminal</div><div className="flex gap-1.5"><input value={terminalCommand} onChange={event => setTerminalCommand(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void runTerminal(); }} placeholder="git status" className="min-w-0 flex-1 rounded-lg border border-white/[0.08] bg-black/20 px-2.5 py-2 font-mono text-[10px] text-slate-300 outline-none placeholder:text-slate-700" /><button type="button" onClick={() => void runTerminal()} disabled={terminalRunning || !terminalCommand.trim()} className="rounded-lg bg-sky-300/15 px-2.5 text-sky-200 disabled:opacity-40"><Play className="h-3.5 w-3.5" /></button></div>{terminalOutput && <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-black/30 p-2.5 font-mono text-[10px] leading-5 text-slate-500">{terminalOutput}</pre>}</div></div>}
           </div>
+
+          {showYurachiCompanion && (
+            <ChibiSwarmPanel
+              docked={true}
+              status={status}
+              statusDetail={statusDetail}
+              busy={busy}
+              lastRunStatus={lastRun?.status}
+              companionPose={companionPose}
+              companionSrc={companion.src}
+              companionLabel={companion.label}
+              toolName={toolRuns.at(-1)?.toolName}
+              activeGoal={goal?.title}
+              swarmEnabled={swarmEnabled}
+              swarmAgents={swarmAgents}
+              swarmPhase={swarmPhase}
+              onToggleSwarm={() => setSwarmEnabled(prev => !prev)}
+              onOpenSwarmInspector={() => {
+                setInspectorTab('agents');
+              }}
+              onOpenSettings={() => openSettings()}
+              onClose={() => {
+                setShowYurachiCompanion(false);
+                notify('Yurachi companion hidden (click Sparkles in header or type /character to restore)');
+              }}
+            />
+          )}
         </aside>
       </div>
 
@@ -2347,6 +2719,134 @@ export default function AppV2() {
                   <div className="border-t border-white/[0.07] pt-4"><div className="flex items-center gap-2 text-xs font-medium text-slate-300"><FolderOpen className="h-3.5 w-3.5 text-sky-200" />Current project</div><div className="mt-2 flex items-center gap-2 rounded-xl border border-white/[0.08] bg-black/20 p-3"><span className="min-w-0 flex-1 truncate font-mono text-[11px] text-slate-500">{workspaceDir}</span><button type="button" onClick={() => void chooseWorkspace()} className="shrink-0 rounded-lg bg-white/[0.07] px-2.5 py-1.5 text-[11px] text-slate-300 hover:bg-white/[0.12]">Change</button></div></div>
                   <div className="border-t border-white/[0.07] pt-4"><div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2 text-xs font-medium text-slate-300"><ShieldCheck className={'h-3.5 w-3.5 ' + (yoloMode ? 'text-rose-200' : 'text-emerald-200')} />Execution safety</div><button type="button" onClick={() => void toggleYolo()} disabled={busy || yoloSaving} className={'rounded-lg border px-2.5 py-1.5 text-[10px] uppercase tracking-[0.12em] disabled:opacity-40 ' + (yoloMode ? 'border-rose-300/25 bg-rose-300/10 text-rose-200' : 'border-white/[0.1] text-slate-500 hover:bg-white/[0.06] hover:text-slate-200')}>{yoloMode ? 'YOLO enabled' : 'Confirm actions'}</button></div><p className="mt-2 text-[10px] leading-5 text-slate-600">YOLO skips confirmation pauses for approval-gated agent tools. Workspace boundaries, read-only Ask/Plan modes, argument validation, and the terminal security gate remain active. This setting is saved in app data.</p></div>
                   <div className="border-t border-white/[0.07] pt-4"><div className="mb-2 flex items-center gap-2 text-xs font-medium text-slate-300"><ShieldCheck className="h-3.5 w-3.5 text-emerald-200" />Bundled capabilities</div><div className="space-y-1.5 font-mono text-[10px]"><div className="flex items-center justify-between border-l border-emerald-300/40 px-2 py-1"><span className="text-slate-400">MCP skill</span><span className="text-emerald-200">{capabilities.mcp?.skillInstalled ? (capabilities.mcp.availability === 'ready' ? 'config detected' : 'preinstalled') : 'unavailable'}</span></div><div className="flex items-center justify-between border-l border-sky-300/40 px-2 py-1"><span className="text-slate-400">Computer Use skill</span><span className="text-sky-200">{capabilities.computerUse?.skillInstalled ? (capabilities.computerUse.availability === 'ready' ? 'bridge detected' : 'preinstalled') : 'unavailable'}</span></div><div className="px-2 pt-1 text-[9px] text-slate-600">{capabilities.mcp?.serverCount || 0} MCP server config{(capabilities.mcp?.serverCount || 0) === 1 ? '' : 's'} detected · credentials stay local</div></div></div>
+
+                  {/* Sound Effects & Volume Control Section */}
+                  <div className="border-t border-white/[0.07] pt-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2 text-xs font-medium text-slate-300">
+                        <Volume2 className="h-3.5 w-3.5 text-pink-300" />
+                        <span>Sound effects & Audio (เสียงเอฟเฟกต์)</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next = toggleSound();
+                          setSoundEnabledState(next);
+                          if (next && soundVolumeState === 0) {
+                            setSoundVolume(85);
+                            setSoundVolumeState(85);
+                          }
+                        }}
+                        className={`rounded-lg border px-2.5 py-1.5 text-[10px] uppercase tracking-[0.12em] transition ${
+                          soundEnabledState
+                            ? 'border-pink-500/30 bg-pink-500/10 text-pink-200'
+                            : 'border-white/[0.1] text-slate-500 hover:bg-white/[0.06] hover:text-slate-200'
+                        }`}
+                      >
+                        {soundEnabledState ? 'Sound ON' : 'Muted'}
+                      </button>
+                    </div>
+
+                    <div className="mt-3 space-y-3.5 rounded-xl border border-white/[0.08] bg-black/25 p-3.5">
+                      <div>
+                        <div className="flex items-center justify-between text-[11px] text-slate-300 mb-1.5">
+                          <span>Volume level (ระดับเสียง)</span>
+                          <span className="font-mono text-pink-300 font-bold text-xs">{soundVolumeState}%</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0"
+                          max="100"
+                          value={soundEnabledState ? soundVolumeState : 0}
+                          onChange={e => {
+                            const val = Number(e.target.value);
+                            setSoundVolume(val);
+                            setSoundVolumeState(val);
+                            if (!soundEnabledState) {
+                              setSoundEnabled(true);
+                              setSoundEnabledState(true);
+                            }
+                          }}
+                          className="w-full accent-pink-400 cursor-pointer h-1.5 bg-white/10 rounded"
+                        />
+                        <div className="mt-1 flex justify-between text-[9px] text-slate-500 font-mono">
+                          <span>0% (Mute)</span>
+                          <span>50%</span>
+                          <span>100% (Max Loud)</span>
+                        </div>
+                      </div>
+
+                      <div className="border-t border-white/[0.06] pt-2.5">
+                        <div className="text-[10px] uppercase tracking-[0.14em] text-slate-400 mb-2">Test sound effects (ทดสอบฟังเสียง)</div>
+                        <div className="flex flex-wrap gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!soundEnabledState || soundVolumeState === 0) {
+                                const newVol = soundVolumeState === 0 ? 85 : soundVolumeState;
+                                setSoundEnabled(true);
+                                setSoundEnabledState(true);
+                                setSoundVolume(newVol);
+                                setSoundVolumeState(newVol);
+                              }
+                              void playChime('start', { force: true });
+                            }}
+                            className="flex items-center gap-1 rounded-lg border border-pink-500/25 bg-pink-500/10 px-2.5 py-1.5 text-[10px] text-pink-200 hover:bg-pink-500/20 active:scale-95 transition"
+                          >
+                            🎵 Task Start
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!soundEnabledState || soundVolumeState === 0) {
+                                const newVol = soundVolumeState === 0 ? 85 : soundVolumeState;
+                                setSoundEnabled(true);
+                                setSoundEnabledState(true);
+                                setSoundVolume(newVol);
+                                setSoundVolumeState(newVol);
+                              }
+                              void playChime('success', { force: true });
+                            }}
+                            className="flex items-center gap-1 rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-1.5 text-[10px] text-emerald-200 hover:bg-emerald-500/20 active:scale-95 transition"
+                          >
+                            🎉 Victory Fanfare
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!soundEnabledState || soundVolumeState === 0) {
+                                const newVol = soundVolumeState === 0 ? 85 : soundVolumeState;
+                                setSoundEnabled(true);
+                                setSoundEnabledState(true);
+                                setSoundVolume(newVol);
+                                setSoundVolumeState(newVol);
+                              }
+                              void playChime('bubble', { force: true });
+                            }}
+                            className="flex items-center gap-1 rounded-lg border border-purple-500/25 bg-purple-500/10 px-2.5 py-1.5 text-[10px] text-purple-200 hover:bg-purple-500/20 active:scale-95 transition"
+                          >
+                            💭 Bubble Pop
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!soundEnabledState || soundVolumeState === 0) {
+                                const newVol = soundVolumeState === 0 ? 85 : soundVolumeState;
+                                setSoundEnabled(true);
+                                setSoundEnabledState(true);
+                                setSoundVolume(newVol);
+                                setSoundVolumeState(newVol);
+                              }
+                              void playChime('error', { force: true });
+                            }}
+                            className="flex items-center gap-1 rounded-lg border border-rose-500/25 bg-rose-500/10 px-2.5 py-1.5 text-[10px] text-rose-200 hover:bg-rose-500/20 active:scale-95 transition"
+                          >
+                            ⚠️ Error Alert
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2354,6 +2854,28 @@ export default function AppV2() {
         </div>
       )}
       {toast && <div className="alisa-toast fixed bottom-5 left-1/2 z-[60] -translate-x-1/2 rounded-xl border border-white/10 bg-[#1b202b] px-4 py-2.5 text-xs text-slate-200 shadow-2xl">{toast}</div>}
+
+      <DiffViewerModal
+        isOpen={Boolean(selectedDiffFile)}
+        onClose={() => setSelectedDiffFile(null)}
+        filePath={selectedDiffFile}
+        changedFiles={changedFiles}
+        onSelectFile={setSelectedDiffFile}
+        onDiscardFile={handleDiscardFile}
+      />
+      <LiveWebPreview
+        isOpen={webPreviewOpen}
+        onClose={() => setWebPreviewOpen(false)}
+      />
+      <TemplateShowcaseModal
+        isOpen={templateModalOpen}
+        onClose={() => setTemplateModalOpen(false)}
+        onSelectTemplate={(prompt) => {
+          setInput(prompt);
+          textareaRef.current?.focus();
+        }}
+      />
+      <ConfettiCanvas />
     </div>
   );
 }

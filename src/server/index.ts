@@ -1,6 +1,6 @@
 import { discoverSkills } from '../core/skills';
 import { ScheduleStore } from './schedules';
-import { gitOverview, listPullRequests } from './git';
+import { gitOverview, listPullRequests, getFileDiff, discardFileChanges } from './git';
 import { z } from 'zod';
 import { SessionStore, type SavedRun } from './sessions';
 import { resolveWorkspacePath } from '../core/workspace';
@@ -466,6 +466,33 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/git' && req.method === 'GET') {
     try { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(await gitOverview(currentConfig.workspaceDir))); }
     catch { res.writeHead(400); res.end(JSON.stringify({ error: 'Cannot read Git status. Open an initialized Git repository with at least one commit.' })); }
+    return;
+  }
+  if (url.pathname === '/api/git/file-diff' && req.method === 'GET') {
+    const filePath = url.searchParams.get('file');
+    if (!filePath) { res.writeHead(400); res.end(JSON.stringify({ error: 'file parameter required' })); return; }
+    try {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify(await getFileDiff(currentConfig.workspaceDir, filePath)));
+    } catch (err: any) {
+      res.writeHead(500); res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+  if (url.pathname === '/api/git/discard-file' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const { filePath } = JSON.parse(body || '{}');
+        if (!filePath) { res.writeHead(400); res.end(JSON.stringify({ error: 'filePath parameter required' })); return; }
+        const result = await discardFileChanges(currentConfig.workspaceDir, filePath);
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify(result));
+      } catch (err: any) {
+        res.writeHead(500); res.end(JSON.stringify({ error: err.message }));
+      }
+    });
     return;
   }
   if (url.pathname === '/api/pull-requests' && req.method === 'GET') {

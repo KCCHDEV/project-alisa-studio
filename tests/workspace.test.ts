@@ -17,7 +17,7 @@ test('workspace rejects traversal and junction escape, including newly created p
     fs.symlinkSync(path.join(root, 'outside'), path.join(root, 'project', 'link'), 'junction');
     expect(() => resolveWorkspacePath(path.join(root, 'project'), '../outside/secret')).toThrow();
     expect(() => resolveWorkspacePath(path.join(root, 'project'), 'link/new/file')).toThrow();
-    expect(resolveWorkspacePath(path.join(root, 'project'), 'new/file')).toBe(path.join(root, 'project/new/file'));
+    expect(resolveWorkspacePath(path.join(root, 'project'), 'new/file')).toBe(path.join(fs.realpathSync(path.join(root, 'project')), 'new/file'));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

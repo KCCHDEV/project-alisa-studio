@@ -76,6 +76,7 @@ export interface Message {
     tokensUsed?: number;
     cost?: number;
     error?: boolean;
+    retryable?: boolean;
   };
 }
 
@@ -109,6 +110,8 @@ export type AgentEvent =
   | ({ type: 'status_change'; status: AgentStatus; detail?: string } & AgentEventMeta)
   | ({ type: 'token_stream'; delta: string } & AgentEventMeta)
   | ({ type: 'thought_stream'; delta: string } & AgentEventMeta)
+  | ({ type: 'stream_reset' } & AgentEventMeta)
+  | ({ type: 'retry_attempt'; attempt: number; maxRetries: number; error: string; delayMs: number } & AgentEventMeta)
   | ({ type: 'context_usage'; usage: ContextUsage } & AgentEventMeta)
   | ({ type: 'plan_update'; items: PlanItem[] } & AgentEventMeta)
   | ({ type: 'goal_update'; goal?: Goal } & AgentEventMeta)

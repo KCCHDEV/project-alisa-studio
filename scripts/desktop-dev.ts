@@ -18,7 +18,7 @@ const environment = {
   // One-time compatibility path for settings created by the old source/dev store.
   ALISA_CONFIG_MIGRATION_SOURCE: resolve(root, '.alisa-config.json'),
 };
-const backend = Bun.spawn([process.execPath, resolve(root, 'src/server/index.ts')], {
+const backend = Bun.spawn([process.execPath, '--watch', resolve(root, 'src/server/index.ts')], {
   cwd: root,
   env: environment,
   stdin: 'ignore',

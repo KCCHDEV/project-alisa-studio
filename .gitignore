@@ -43,6 +43,8 @@ builder-debug.yml
 .ichigo-snapshots/
 work.md
 
-src-tauri/binaries/
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+
 
 .alisa-schedules.json*

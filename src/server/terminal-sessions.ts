@@ -99,13 +99,13 @@ export class TerminalSessionManager {
         const script = ['/usr/bin/script', '/bin/script'].find(candidate => fs.existsSync(candidate));
         const shellName = path.basename(shell).toLowerCase();
         const interactiveArgs = shellName === 'fish'
-          ? ['--no-config', '-i']
+          ? ['-i']
           : shellName === 'zsh'
-            ? ['-f', '-i']
+            ? ['-i']
             : shellName === 'bash'
-              ? ['--noprofile', '--norc', '-i']
+              ? ['-i']
               : ['-i'];
-        if (script) {
+        if (process.platform === 'linux' && script) {
           // util-linux `script` gives the local shell a real PTY, which keeps
           // fish/zsh line editing, prompts, colors, and interactive commands working.
           // Startup files are skipped because some configs wait for responses
@@ -191,6 +191,12 @@ export class TerminalSessionManager {
       this.remove(id);
       callbacks.onExit(id, code, signal, session.stopReason);
     });
+
+    setTimeout(() => {
+      if (!session.ended) {
+        callbacks.onOutput(id, `✦ Terminal ready (${target.kind === 'local' ? target.cwd : target.host})\n$ `, 'stdout');
+      }
+    }, 50);
     return info;
   }
 

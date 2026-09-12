@@ -18,79 +18,230 @@ body {
   overflow: hidden;
 }
 
-/* Fast, non-blocking desktop boot mark. The workspace mounts underneath it so
-   the animation never becomes an artificial loading screen. */
+/* Premium desktop boot & startup overlay */
 .alisa-boot {
   position: fixed;
   inset: 0;
-  z-index: 100;
+  z-index: 9999;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #000;
-  color: #f2f2f2;
+  background: radial-gradient(circle at 50% 40%, #0e131f 0%, #07090f 65%, #030407 100%);
+  color: #f8fafc;
+  cursor: pointer;
+  user-select: none;
+  overflow: hidden;
+  transition: opacity 450ms cubic-bezier(0.16, 1, 0.3, 1), transform 450ms cubic-bezier(0.16, 1, 0.3, 1), filter 450ms ease;
+}
+
+.alisa-boot-ambient {
+  position: absolute;
+  width: 520px;
+  height: 520px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(56, 189, 248, 0.15) 0%, rgba(129, 140, 248, 0.1) 45%, transparent 70%);
+  filter: blur(64px);
   pointer-events: none;
+  animation: alisa-ambient-pulse 4s ease-in-out infinite alternate;
 }
 
 .alisa-boot-inner {
-  width: min(360px, calc(100vw - 48px));
-  animation: alisa-boot-rise 360ms cubic-bezier(.22, 1, .36, 1) both;
+  position: relative;
+  width: min(440px, calc(100vw - 48px));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 40px 36px;
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(24px);
+  box-shadow: 0 30px 60px -15px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  animation: alisa-boot-rise 600ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.alisa-boot-avatar-wrap {
+  position: relative;
+  width: 76px;
+  height: 76px;
+  margin-bottom: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.alisa-boot-avatar {
+  width: 76px;
+  height: 76px;
+  border-radius: 22px;
+  object-fit: cover;
+  position: relative;
+  z-index: 2;
+  box-shadow: 0 10px 28px -4px rgba(56, 189, 248, 0.45);
+  border: 1.5px solid rgba(56, 189, 248, 0.5);
+}
+
+.alisa-boot-avatar-ring {
+  position: absolute;
+  inset: -4px;
+  border-radius: 26px;
+  background: linear-gradient(135deg, #38bdf8, #818cf8, #ec4899);
+  opacity: 0.65;
+  z-index: 1;
+  filter: blur(3px);
+  animation: alisa-spin-slow 10s linear infinite;
+}
+
+.alisa-boot-avatar-glow {
+  position: absolute;
+  inset: -16px;
+  border-radius: 34px;
+  background: radial-gradient(circle, rgba(56, 189, 248, 0.35), transparent 70%);
+  filter: blur(14px);
+  z-index: 0;
 }
 
 .alisa-boot-logo {
-  font-size: 18px;
-  font-weight: 600;
-  letter-spacing: .22em;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  color: #f1f5f9;
+  text-transform: uppercase;
 }
 
-.alisa-boot-logo span {
-  color: #8da4c6;
+.alisa-boot-accent {
+  background: linear-gradient(135deg, #38bdf8 0%, #818cf8 50%, #c084fc 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
 .alisa-boot-version {
-  margin-top: 8px;
-  color: #444;
-  font-size: 9px;
-  letter-spacing: .16em;
-}
-
-.alisa-boot-status {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 36px;
-  color: #777;
+  margin-top: 6px;
+  color: #64748b;
   font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
-.alisa-boot-status span {
-  color: #79d99a;
-  font-size: 9px;
+.alisa-boot-dot {
+  color: #334155;
 }
 
-.alisa-boot-status i {
-  width: 5px;
-  height: 13px;
-  border-right: 1px solid #8da4c6;
-  animation: alisa-boot-caret 720ms steps(1, end) infinite;
+.alisa-boot-progress-bar {
+  width: 100%;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  margin-top: 28px;
+  overflow: hidden;
+  position: relative;
+}
+
+.alisa-boot-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #38bdf8, #818cf8, #a855f7);
+  border-radius: 999px;
+  transition: width 400ms cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.6);
+}
+
+.alisa-boot-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+}
+
+.alisa-boot-beacon {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 8px;
+  height: 8px;
+}
+
+.alisa-boot-beacon-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #34d399;
+  box-shadow: 0 0 8px #34d399;
+}
+
+.alisa-boot-beacon-ping {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgba(52, 211, 153, 0.4);
+  animation: alisa-ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+.alisa-boot-stage-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.alisa-boot-skip-hint {
+  margin-top: 22px;
+  font-size: 10px;
+  color: #475569;
+  letter-spacing: 0.05em;
+  opacity: 0;
+  animation: alisa-fade-in 800ms ease 1s forwards;
 }
 
 .alisa-boot-exiting {
-  animation: alisa-boot-fade 220ms ease forwards;
+  opacity: 0;
+  transform: scale(1.03);
+  filter: blur(8px);
+  pointer-events: none;
+}
+
+@keyframes alisa-ambient-pulse {
+  0% { transform: scale(0.92); opacity: 0.55; }
+  100% { transform: scale(1.18); opacity: 0.85; }
 }
 
 @keyframes alisa-boot-rise {
-  from { opacity: 0; transform: translateY(7px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
-@keyframes alisa-boot-fade {
-  from { opacity: 1; }
-  to { opacity: 0; }
+@keyframes alisa-ping {
+  75%, 100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
 }
 
-@keyframes alisa-boot-caret {
-  50% { opacity: 0; }
+@keyframes alisa-spin-slow {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes alisa-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 0.7; transform: translateY(0); }
 }
 
 /* Short, compositor-friendly transitions for workspace navigation. These are
@@ -161,11 +312,11 @@ body {
    status marker once a conversation is underway. */
 .yurachi-companion {
   display: flex;
-  width: min(176px, 42vw);
+  width: min(280px, 70vw);
   flex-direction: column;
   align-items: center;
-  gap: 7px;
-  margin: 0 auto 17px;
+  gap: 12px;
+  margin: 0 auto 24px;
   animation: alisa-companion-in 220ms cubic-bezier(.22, 1, .36, 1) both;
 }
 
@@ -173,22 +324,24 @@ body {
   display: block;
   width: 100%;
   aspect-ratio: 1;
-  border: 1px solid #202020;
+  border: 1px solid #2e2633;
+  border-radius: 20px;
   object-fit: cover;
-  opacity: .92;
+  opacity: .95;
+  filter: drop-shadow(0 10px 24px rgba(239, 143, 189, 0.25));
   animation: alisa-companion-pose-in 180ms cubic-bezier(.22, 1, .36, 1) both;
 }
 
 .yurachi-companion-caption {
-  color: #555;
-  font-size: 9px;
-  letter-spacing: .13em;
+  color: #777;
+  font-size: 11px;
+  letter-spacing: .12em;
   line-height: 1.4;
   text-transform: uppercase;
 }
 
 .yurachi-companion-caption span {
-  color: #3d3d3d;
+  color: #aaa;
   letter-spacing: .02em;
   text-transform: none;
 }
@@ -196,9 +349,9 @@ body {
 .yurachi-companion-mini {
   display: flex;
   align-items: center;
-  gap: 6px;
-  color: #666;
-  font-size: 9px;
+  gap: 8px;
+  color: #888;
+  font-size: 10px;
   line-height: 1;
   text-transform: uppercase;
   white-space: nowrap;
@@ -206,11 +359,12 @@ body {
 
 .yurachi-companion-mini img {
   display: block;
-  width: 28px;
-  height: 28px;
-  border: 1px solid #242424;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid #3d2538;
   object-fit: cover;
-  opacity: .9;
+  opacity: .96;
   animation: alisa-companion-pose-in 160ms cubic-bezier(.22, 1, .36, 1) both;
 }
 
@@ -731,7 +885,9 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .alisa-boot-inner,
   .alisa-boot-exiting,
-  .alisa-boot-status i,
+  .alisa-boot-status,
+  .alisa-boot-ambient,
+  .alisa-boot-avatar-ring,
   .workspace-transition,
   .workspace-transition-exit,
   .workspace-transition-inner,

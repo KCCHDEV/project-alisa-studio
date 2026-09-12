@@ -15,15 +15,15 @@ export const AlisaAvatar: React.FC<AlisaAvatarProps> = ({
   const [imgError, setImgError] = useState(false);
 
   const sizeMap = {
-    sm: 'w-7 h-7 rounded-lg',
-    md: 'w-8 h-8 rounded-xl',
-    lg: 'w-12 h-12 rounded-2xl',
+    sm: 'w-8 h-8 rounded-xl',
+    md: 'w-10 h-10 rounded-2xl',
+    lg: 'w-16 h-16 rounded-3xl',
   };
 
   const iconSizeMap = {
-    sm: 'w-3.5 h-3.5',
-    md: 'w-4 h-4',
-    lg: 'w-6 h-6',
+    sm: 'w-4 h-4',
+    md: 'w-5 h-5',
+    lg: 'w-8 h-8',
   };
 
   return (

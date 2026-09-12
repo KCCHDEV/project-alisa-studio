@@ -159,6 +159,24 @@ export class Agent {
               currentThought += delta;
               this.emit({ type: 'thought_stream', delta });
             },
+            onResetPartialStream: () => {
+              currentResponseContent = '';
+              currentThought = '';
+              this.emit({ type: 'stream_reset' });
+            },
+            onRetry: (info) => {
+              const seconds = Math.max(1, Math.round(info.delayMs / 1000));
+              const shortErr = info.error.message.replace(/^LLM API Error \(\d+\):\s*/i, '').slice(0, 60);
+              const detail = `🔄 OmniRoute error (${shortErr}) กำลังลองใหม่อัตโนมัติ ${info.attempt}/${info.maxRetries} (${seconds}s)...`;
+              this.setStatus('thinking', detail);
+              this.emit({
+                type: 'retry_attempt',
+                attempt: info.attempt,
+                maxRetries: info.maxRetries,
+                error: info.error.message,
+                delayMs: info.delayMs,
+              });
+            },
           },
           this.currentAbortController.signal
         );
@@ -181,7 +199,7 @@ export class Agent {
           role: 'assistant',
           content: `[Error] เกิดข้อผิดพลาดในการเรียกโมเดล: ${errMsg}`,
           timestamp: Date.now(),
-          metadata: { error: true, model: this.getModelName() },
+          metadata: { error: true, retryable: true, model: this.getModelName() },
         };
         sessionMessages.push(errorAssistantMsg);
         this.emit({ type: 'message_added', message: errorAssistantMsg });
