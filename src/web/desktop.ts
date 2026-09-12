@@ -19,7 +19,8 @@ export function isTauriEnvironment(): boolean {
   return Boolean(
     window.__TAURI_INTERNALS__ ||
     window.location.hostname === 'tauri.localhost' ||
-    window.location.protocol === 'tauri:'
+    window.location.protocol === 'tauri:' ||
+    window.location.search.includes('preview=true')
   );
 }
 

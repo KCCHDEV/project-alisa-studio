@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Project Alisa Studio V2 - Autonomous AI Coding Environment with Anime Companion Swarm</title>
+  
+  <!-- SEO & Social Meta Tags -->
+  <meta name="description" content="Project Alisa Studio V2 — สภาพแวดล้อมการเขียนโค้ดด้วย AI อัตโนมัติ ผสานพลัง Agent Swarm และคู่หูอนิเมะ Yurachi สร้างบน Tauri v2 และ Bun เร็ว เบา ไร้รอยต่อ">
+  <meta property="og:title" content="Project Alisa Studio V2 - Next-Gen Autonomous AI Coding">
+  <meta property="og:description" content="AI Coding Desktop App รุ่นใหม่ พร้อม Agent Swarm 4 บทบาท และคู่หู Yurachi ที่คอยช่วยเหลือและมีเสียงสังเคราะห์แบบโพรซีเจอรัล">
+  <meta property="og:image" content="./screenshots/app-v2-swarm.jpg">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary_large_image">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="./assets/icon.png">
+
+  <!-- Google Fonts: Outfit, Inter, JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@500;600;700;800;900&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+
+  <!-- Ambient Light Accents -->
+  <div class="ambient-glow ambient-glow-1"></div>
+  <div class="ambient-glow ambient-glow-2"></div>
+  <div class="ambient-glow ambient-glow-3"></div>
+  <div class="cyber-grid"></div>
+
+  <!-- Navbar -->
+  <header class="navbar">
+    <div class="container">
+      <a href="#" class="nav-brand">
+        <img src="./assets/icon.png" alt="Project Alisa Studio Logo" class="nav-logo">
+        <span class="brand-text">ALISA STUDIO <span class="brand-sub">V2.0.2</span></span>
+      </a>
+
+      <nav>
+        <ul class="nav-menu">
+          <li><a href="#showcase" class="nav-link">การใช้งานจริง</a></li>
+          <li><a href="#architecture" class="nav-link">สถาปัตยกรรม</a></li>
+          <li><a href="#recommendations" class="nav-link">คำแนะนำตรงๆ</a></li>
+          <li><a href="#roadmap" class="nav-link">Roadmap</a></li>
+          <li><a href="#supporters" class="nav-link">ผู้สนับสนุน</a></li>
+          <li><a href="#faq" class="nav-link">คำถามที่พบบ่อย</a></li>
+        </ul>
+      </nav>
+
+      <div class="nav-actions">
+        <a href="https://donate-naygolf.netlify.app" target="_blank" rel="noopener noreferrer" class="btn btn-secondary" style="padding: 8px 14px; font-size: 0.875rem; border-color: rgba(236, 72, 153, 0.4); color: #f472b6;">
+          ☕ Donate
+        </a>
+        <a href="https://github.com/KCCHDEV/project-alisa-studio" target="_blank" rel="noopener noreferrer" class="btn btn-secondary" style="padding: 8px 16px; font-size: 0.875rem;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+          GitHub Star
+        </a>
+        <a href="#downloads" class="btn btn-primary" style="padding: 8px 18px; font-size: 0.875rem;">
+          ดาวน์โหลดฟรี
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <section class="hero" id="downloads">
+    <div class="container">
+      
+      <div class="hero-grid">
+        <div class="hero-content">
+          <a href="https://github.com/KCCHDEV/project-alisa-studio/releases/tag/v2.0.2" target="_blank" rel="noopener noreferrer" class="announcement-bar">
+            <span class="badge badge-cyan">v2.0.2 NEW</span>
+            <span>ปล่อยตัวติดตั้ง Native Windows (.exe) & macOS (.dmg) แล้ววันนี้!</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          </a>
+
+          <h1 class="hero-title">
+            AUTONOMOUS <span class="text-gradient">AI CODING</span> WITH ANIME SWARM
+          </h1>
+
+          <p class="hero-description">
+            สภาพแวดล้อมเขียนโค้ด AI บน Desktop ยุคใหม่ ผสาน <strong>Agent Swarm 4 บทบาท</strong> (Explorer, Planner, Builder, Reviewer) เข้ากับคู่หูอนิเมะ <strong>Yurachi</strong> ตอบสนองแบบ Real-time สร้างบน <strong>Tauri v2 + Bun</strong> เร็วจัด เบาเครื่อง และระบบสตรีมที่ไม่เคยค้าง
+          </p>
+
+          <div class="hero-cta">
+            <div class="download-pill-group">
+              <a href="https://github.com/KCCHDEV/project-alisa-studio/releases/download/v2.0.2/Project-Alisa-Studio-V2-macOS.dmg" class="btn btn-primary" id="btn-dl-mac">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M15.97 6.37c.62-.75 1.04-1.8 0.92-2.85-.9.04-2 0.6-2.65 1.35-.58.66-1.09 1.73-.95 2.76.99.08 2.03-.51 2.68-1.26z"/></svg>
+                Download for macOS (.dmg)
+              </a>
+              <span class="cta-subtext">✨ 36 MB • รองรับทั้ง Apple Silicon (M1/M2/M3/M4) และ Intel</span>
+            </div>
+
+            <div class="download-pill-group">
+              <a href="https://github.com/KCCHDEV/project-alisa-studio/releases/download/v2.0.2/Project.Alisa.Studio.V2_2.0.2_x64-setup.exe" class="btn btn-secondary" id="btn-dl-win">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.951-1.801"/></svg>
+                Download for Windows (.exe)
+              </a>
+              <span class="cta-subtext">⚡ 51 MB • Windows 10/11 x64 NSIS Custom Installer</span>
+            </div>
+          <div style="margin-bottom: 24px;">
+            <a href="https://github.com/KCCHDEV/project-alisa-studio/releases" target="_blank" rel="noopener noreferrer" style="color: var(--accent-cyan); font-size: 0.9rem; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; font-weight: 500;">
+              <span>📦 ดูรายการเวอร์ชันทั้งหมดและ Source Code ที่ GitHub Releases</span>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            </a>
+          </div>
+
+          <div style="display: flex; gap: 20px; align-items: center; font-size: 0.9rem; color: var(--text-muted);">
+            <span>✅ Open Source (MIT)</span>
+            <span>✅ 100% Offline Capable</span>
+            <span>✅ ไร้ Telemetry แอบแฝง</span>
+          </div>
+        </div>
+
+        <!-- Interactive Mascot Box on Hero -->
+        <div class="hero-companion-card" id="interactive-mascot">
+          <div class="companion-badge-row">
+            <span class="badge badge-purple">LIVE MASCOT DEMO</span>
+            <button class="sound-toggle-btn" id="sfx-toggle" title="เปิด/ปิดเสียงเอฟเฟกต์">
+              <span id="sfx-icon">🔊</span>
+              <span style="font-size: 0.75rem;">Sound FX</span>
+            </button>
+          </div>
+
+          <div class="companion-avatar-wrap">
+            <img src="./assets/yurachi-chibi-coding.webp" alt="Yurachi Mascot" class="companion-avatar" id="mascot-img">
+          </div>
+
+          <div class="speech-bubble" id="mascot-bubble">
+            "สวัสดีค่า! ยูราจิพร้อมช่วยเขียนโค้ดและรัน Swarm ให้คุณแล้วนะ กดลองสลับอารมณ์ดูสิคะ!"
+          </div>
+
+          <div class="expression-picker">
+            <button class="expr-btn active" data-expr="coding" data-img="./assets/yurachi-chibi-coding.webp" data-quote="กำลังเขียนโค้ดฟีเจอร์ใหม่อย่างตั้งใจเลยค่ะ! 💻">Coding 💻</button>
+            <button class="expr-btn" data-expr="thinking" data-img="./assets/yurachi-chibi-thinking.webp" data-quote="อืมม... กำลังวางแผนโครงสร้างระบบร่วมกับ Swarm อยู่ค่ะ! 💡">Thinking 💡</button>
+            <button class="expr-btn" data-expr="terminal" data-img="./assets/yurachi-chibi-terminal.webp" data-quote="กำลังรันคำสั่ง Shell ในเทอร์มินัลความเร็วสูงค่ะ! ⚡">Terminal ⚡</button>
+            <button class="expr-btn" data-expr="review" data-img="./assets/yurachi-chibi-review.webp" data-quote="ตรวจเช็คโค้ด Diff ทุกบรรทัดให้มั่นใจว่าไม่มีบักแน่นอน! 🧐">Review 🧐</button>
+            <button class="expr-btn" data-expr="success" data-img="./assets/yurachi-chibi-success.webp" data-quote="ภารกิจเสร็จสมบูรณ์แล้ว! เก่งมากเลยค่าา เย้! 🎉">Success 🎉</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Showcase Section (รูปการใช้งานจริง) -->
+  <section class="section" id="showcase">
+    <div class="container">
+      <div class="section-header">
+        <span class="badge badge-cyan">REAL INTERFACE</span>
+        <h2 class="section-title">รูปและภาพการใช้งานจริง</h2>
+        <p class="section-subtitle">สัมผัสประสบการณ์ทำงานจริงใน Project Alisa Studio V2 ที่ออกแบบมาเพื่อคนทำงานระดับโปร</p>
+      </div>
+
+      <div class="showcase-container">
+        <div class="showcase-tabs">
+          <button class="showcase-tab-btn active" data-tab="tab-swarm">
+            🤖 Agent Swarm & Chibi Dock
+          </button>
+          <button class="showcase-tab-btn" data-tab="tab-files">
+            📁 File Tree & Project Explorer
+          </button>
+          <button class="showcase-tab-btn" data-tab="tab-preview">
+            🌐 Live Responsive Web Preview
+          </button>
+          <button class="showcase-tab-btn" data-tab="tab-templates">
+            📦 1-Click Starter Scaffolder
+          </button>
+          <button class="showcase-tab-btn" data-tab="tab-settings">
+            ⚙️ Workspace Settings & Audio FX
+          </button>
+          <button class="showcase-tab-btn" data-tab="tab-terminal">
+            ⚡ High-Speed Native Terminal
+          </button>
+        </div>
+
+        <!-- Panel 1: Swarm & Chibi Dock -->
+        <div class="showcase-panel active" id="tab-swarm">
+          <div class="showcase-media">
+            <img src="./screenshots/app-v2-swarm.jpg" alt="Agent Swarm & Chibi Dock" class="showcase-img">
+          </div>
+          <div class="showcase-content">
+            <span class="badge badge-purple" style="margin-bottom: 12px;">INSPECTOR DOCKED MASCOT</span>
+            <h3>Agent Swarm + Yurachi Docked</h3>
+            <p>
+              ยูราจิและแถบกระบวนการทำงานแบบ Swarm 4 บทบาทถูกย้ายมาติดไว้ที่ส่วนล่างของเมนูด้านขวาอย่างเป็นระเบียบ ไม่บดบังพื้นที่แชทหรือไฟล์โค้ด พร้อมคำพูดทักทายและคำแนะนำตามงานจริง
+            </p>
+            <ul class="showcase-points">
+              <li>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span><strong>4-Agent Pipeline</strong>: Explorer 🔍 &rarr; Planner 📋 &rarr; Builder 💻 &rarr; Reviewer 🧐 ทำงานร่วมกันอัตโนมัติ</span>
+              </li>
+              <li>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span><strong>Responsive Companion</strong>: เปลี่ยนท่าทาง คำพูด และอารมณ์ตามสถานะของงานจริง พร้อมระบบเสียงเอฟเฟกต์ Procedural Audio</span>
+              </li>
+              <li>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span><strong>Collapsible Bar</strong>: ย่อ-ขยาย หรือซ่อนได้ทันใจเมื่อต้องการพื้นที่ตรวจสอบโค้ดเต็มตา</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Panel 2: Files Explorer -->
+        <div class="showcase-panel" id="tab-files">
+          <div class="showcase-media">
+            <img src="./screenshots/app-v2-files.jpg" alt="File Tree Explorer" class="showcase-img">
+          </div>
+          <div class="showcase-content">
+            <span class="badge badge-cyan" style="margin-bottom: 12px;">PROJECT FILE EXPLORER</span>
+            <h3>จัดการโครงสร้างไฟล์โปรเจกต์ได้เต็มรูปแบบ</h3>
+            <p>
+              เปิดดูโครงสร้างไดเรกทอรี ไฟล์ซอร์สโค้ด และการเปลี่ยนแปลงในโปรเจกต์ได้โดยตรง พร้อมระบบค้นหาไฟล์และกรองไฟล์ความเร็วสูง
+            </p>
+            <ul class="showcase-points">
+              <li>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span><strong>Hierarchical Tree View</strong>: กางและยุบโฟลเดอร์ได้อย่างราบรื่น แยกหมวดหมู่และไอคอนตามนามสกุลไฟล์</span>
+              </li>
+              <li>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span><strong>Instant Sync</strong>: ตรวจจับไฟล์ที่ AI สร้างหรือแก้ไขแบบ Real-time โดยไม่ต้องกดรีเฟรชเอง</span>
+              </li>
+              <li>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span><strong>Quick Switcher</strong>: สลับระหว่างแท็บแชทและไฟล์โค้ดได้ในคลิกเดียว</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Panel 3: Live Preview -->
+        <div class="showcase-panel" id="tab-preview">
+          <div class="showcase-media">
+            <img src="./screenshots/app-v2-preview.jpg" alt="Live Responsive Preview" class="showcase-img">
+          </div>
+          <div class="showcase-content">
+            <span class="badge badge-cyan" style="margin-bottom: 12px;">NO BROWSER SWITCHING</span>
+            <h3>Live Responsive Web Preview</h3>
+            <p>
+              ดูผลลัพธ์ของเว็บแอปพลิเคชันที่คุณสั่งให้ AI สร้างได้โดยตรงในตัวโปรแกรม ไม่ต้องสลับหน้าต่างไปที่ Chrome หรือ Safari
+            </p>
+            <ul class="showcase-points">
+              <li>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span><strong>Viewport Switcher</strong>: สลับดูขนาด Desktop (100%), Tablet (768px), และ Mobile (375px) ได้ทันที</span>
+              </li>
+              <li>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span><strong>Dev Server Shortcut Chips</strong>: กดเชื่อมต่อพอร์ตยอดนิยมอย่าง :3000, :5173, :8080 ได้ใน 1 คลิก</span>
+              </li>
+              <li>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span><strong>In-App Reload & External Open</strong>: รีเฟรชดูการเปลี่ยนแปลงหรือเปิดบนเบราว์เซอร์จริงได้สะดวก</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Panel 4: Templates -->
+        <div class="showcase-panel" id="tab-templates">
+          <div class="showcase-media">
+            <img src="./screenshots/app-v2-templates.jpg" alt="Starter Templates" class="showcase-img">
+          </div>
+          <div class="showcase-content">
+            <span class="badge badge-purple" style="margin-bottom: 12px;">INSTANT SCAFFOLDING</span>
+            <h3>1-Click Starter Template Scaffolder</h3>
+            <p>
+              เริ่มโปรเจกต์ใหม่ได้ในเสี้ยววินาทีด้วยเทมเพลตมาตรฐานสากล พร้อม Prompt เชิงสถาปัตยกรรมที่คัดสรรมาอย่างประณีต
+            </p>
+            <ul class="showcase-points">
+              <li>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span><strong>Modern AI SaaS Dashboard</strong>: React + Tailwind CSS + Lucide Icons + Dark Mode</span>
+              </li>
+              <li>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span><strong>3D Interactive Three.js Game</strong>: โลกเสมือน Procedural พร้อมระบบแสงและปุ่มควบคุม</span>
+              </li>
+              <li>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span><strong>High-Converting Landing Page & Bot</strong>: เทมเพลต Discord/Telegram Bot พร้อมทำงานทันที</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Panel 5: Settings & Audio -->
+        <div class="showcase-panel" id="tab-settings">
+          <div class="showcase-media">
+            <img src="./screenshots/app-v2-settings.jpg" alt="Workspace Settings & Audio" class="showcase-img">
+          </div>
+          <div class="showcase-content">
+            <span class="badge badge-emerald" style="margin-bottom: 12px;">WORKSPACE CUSTOMIZATION</span>
+            <h3>Settings, AI Providers & Audio FX</h3>
+            <p>
+              ควบคุมสภาพแวดล้อมได้เบ็ดเสร็จ: สลับผู้ให้บริการโมเดล AI (OmniRoute, OpenRouter, DeepSeek, OpenAI, Local Ollama), ตั้งค่า YOLO Execution Safety และปรับระดับเสียงเอฟเฟกต์
+            </p>
+            <ul class="showcase-points">
+              <li>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span><strong>Multi-Provider Architecture</strong>: เชื่อมต่อ Gateway ได้หลายตัวพร้อมสลับใช้งานได้ทันที</span>
+              </li>
+              <li>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span><strong>Sound Effects Controls</strong>: เปิด-ปิดเสียง และปรับระดับความดัง (Volume Slider) ตามใจชอบ</span>
+              </li>
+              <li>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span><strong>YOLO Execution Safety</strong>: เลือกได้ว่าจะให้ AI รันคำสั่งทันทีหรือรอการอนุมัติของคุณก่อน</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Panel 6: Terminal -->
+        <div class="showcase-panel" id="tab-terminal">
+          <div class="showcase-media">
+            <img src="./screenshots/app-v2-terminal.jpg" alt="High-Speed Native Terminal" class="showcase-img">
+          </div>
+          <div class="showcase-content">
+            <span class="badge badge-cyan" style="margin-bottom: 12px;">NATIVE PTY ENGINE</span>
+            <h3>High-Speed Native Shell Terminal</h3>
+            <p>
+              เทอร์มินัลจริงที่เชื่อมต่อกับ PTY ของระบบโดยตรง รันคำสั่ง Bash / Zsh / PowerShell ได้เต็มประสิทธิภาพ พร้อมรองรับ Session แยกระหว่าง Local และ SSH
+            </p>
+            <ul class="showcase-points">
+              <li>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span><strong>Zero-Lag Output</strong>: ถ่ายทอดผลลัพธ์คำสั่งแบบเรียลไทม์ผ่าน WebSocket ความเร็วสูง</span>
+              </li>
+              <li>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span><strong>Quick Interruption (Ctrl+C)</strong>: สั่งหยุดกระบวนการที่รันค้างอยู่ได้ทันทีผ่านปุ่ม Stop หรือคีย์บอร์ด</span>
+              </li>
+              <li>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span><strong>Agent Command Audit</strong>: มองเห็นทุกคำสั่งที่ AI นำไปรันอย่างโปร่งใส</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- Architecture & Project Overall Section -->
+  <section class="section" id="architecture" style="background: rgba(12, 16, 26, 0.5);">
+    <div class="container">
+      <div class="section-header">
+        <span class="badge badge-purple">TECH ARCHITECTURE</span>
+        <h2 class="section-title">สถาปัตยกรรม & ภาพรวมของระบบ</h2>
+        <p class="section-subtitle">สร้างบนพื้นฐานเทคโนโลยีที่ทันสมัยที่สุด ไร้ความเทอะทะของ Electron</p>
+      </div>
+
+      <div class="tech-grid">
+        <div class="tech-card">
+          <div class="tech-icon">🦀</div>
+          <h4>Tauri v2 + Rust</h4>
+          <p>แกนหลักของเดสก์ท็อปแอปเขียนด้วยภาษา Rust กินหน่วยความจำน้อยกว่า Electron ถึง 4 เท่า สตาร์ทโปรแกรมไว และมีความปลอดภัยสูง</p>
+        </div>
+
+        <div class="tech-card">
+          <div class="tech-icon">⚡</div>
+          <h4>Bun HTTP/WS Server</h4>
+          <p>เซิร์ฟเวอร์แบ็กเอนด์เฉพาะที่รันบน Bun Runtime จัดการ WebSocket, การอ่านเขียนไฟล์ และการรัน Shell PTY Terminal ด้วยความเร็วระดับ C++</p>
+        </div>
+
+        <div class="tech-card">
+          <div class="tech-icon">🔄</div>
+          <h4>OmniRoute Zero-Stall</h4>
+          <p>เกตเวย์เชื่อมต่อโมเดล LLM พร้อม Inactivity Watchdog 25 วินาที และ Smart Exponential Backoff หมดปัญหาแอปค้างหรือนิ่งไปเฉยๆ</p>
+        </div>
+
+        <div class="tech-card">
+          <div class="tech-icon">🎵</div>
+          <h4>Procedural Web Audio</h4>
+          <p>ระบบเสียงเอฟเฟกต์สังเคราะห์ความถี่เสียงด้วยโค้ด Pure Web Audio API ทำงานออฟไลน์ 100% โดยไม่ต้องโหลดไฟล์ mp3 หรือ wav ภายนอก</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Direct & Honest Recommendations Section (คำแนะนำอะไรให้ตรงๆ) -->
+  <section class="section" id="recommendations">
+    <div class="container">
+      <div class="section-header">
+        <span class="badge badge-cyan">HONEST & DIRECT</span>
+        <h2 class="section-title">คำแนะนำและข้อเท็จจริงแบบตรงไปตรงมา</h2>
+        <p class="section-subtitle">เราเชื่อในความโปร่งใส นี่คือสิ่งที่คุณควรรู้ก่อนใช้งานจริง</p>
+      </div>
+
+      <div class="recommendations-grid">
+        
+        <!-- Rec 1: Models -->
+        <div class="rec-card">
+          <div class="rec-icon">🧠</div>
+          <h3>การเลือกใช้ AI Model ให้คุ้มที่สุด</h3>
+          <p>
+            อย่าใช้โมเดลใหญ่ตัวเดียวกับทุกงาน! สำหรับงานค้นหา แก้ไขไฟล์ทั่วไป แนะนำ <strong>Gemini 2.5 Flash</strong> (เร็วมากและประหยัดสุดๆ) ส่วนงานที่ต้องคิดโครงสร้างซับซ้อนให้ใช้ <strong>Claude 3.5 Sonnet</strong> หรือ <strong>DeepSeek R1</strong> สำหรับงานตรรกะคณิตศาสตร์
+          </p>
+          <span class="rec-tag">#OmniRoute #ModelTierList</span>
+        </div>
+
+        <!-- Rec 2: Hardware -->
+        <div class="rec-card">
+          <div class="rec-icon">💻</div>
+          <h3>สเปกเครื่องและความเป็นจริง</h3>
+          <p>
+            ตัวแอป Alisa ใช้ RAM เพียง 150-300MB เท่านั้น แต่เนื่องจากต้องรันโปรเจกต์ของคุณเอง (เช่น node_modules, vite dev server, compiler) จึงแนะนำให้มี <strong>RAM ขั้นต่ำ 8GB และแนะนำ 16GB</strong> สำหรับการรันหลายโปรเจกต์พร้อมกัน
+          </p>
+          <span class="rec-tag">#HardwareRequirements</span>
+        </div>
+
+        <!-- Rec 3: Unsigned Binaries -->
+        <div class="rec-card">
+          <div class="rec-icon">🛡️</div>
+          <h3>ความจริงเรื่อง Unsigned Binary</h3>
+          <p>
+            เนื่องจาก Alisa Studio เป็นโปรเจกต์โอเพนซอร์สฟรี เราไม่ได้จ่ายค่าธรรมเนียม $99/ปี ให้ Apple หรือ $400/ปี ให้ Microsoft สำหรับใบรับรององค์กร ทำให้ macOS อาจขึ้นเตือน <em>"Unidentified Developer"</em> (กดคลิกขวา &gt; Open ได้เลย) และ Windows อาจขึ้น <em>"SmartScreen"</em> (กด More info &gt; Run anyway) มั่นใจได้ว่าโค้ดทั้งหมดเปิดเผยและปลอดภัย 100%
+          </p>
+          <span class="rec-tag">#Gatekeeper #SmartScreen</span>
+        </div>
+
+        <!-- Rec 4: VSCode vs Alisa -->
+        <div class="rec-card">
+          <div class="rec-icon">⚖️</div>
+          <h3>เมื่อไหร่ควรใช้ Alisa vs VSCode?</h3>
+          <p>
+            ถ้าคุณต้องการนั่งเคาะพิมพ์โค้ดเองทีละบรรทัด VSCode อาจตอบโจทย์กว่า แต่ถ้าคุณต้องการ <strong>Autonomous Flow</strong> ที่คุณสั่งงานเป้าหมายระดับสูง แล้วปล่อยให้ Agent Swarm คิด วางแผน แก้ไข รันเทอร์มินัล และรีวิวให้เบ็ดเสร็จ Alisa Studio จะช่วยประหยัดเวลาของคุณได้มหาศาล
+          </p>
+          <span class="rec-tag">#AutonomousAgent</span>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- Roadmap Updates Section -->
+  <section class="section" id="roadmap" style="background: rgba(10, 13, 20, 0.6);">
+    <div class="container">
+      <div class="section-header">
+        <span class="badge badge-purple">DEVELOPMENT ROADMAP</span>
+        <h2 class="section-title">แผนงานและการอัปเดต (Roadmap)</h2>
+        <p class="section-subtitle">ความคืบหน้าของสิ่งที่เราทำเสร็จแล้ว และทิศทางในอนาคต</p>
+      </div>
+
+      <div class="roadmap-timeline">
+        
+        <!-- v2.0 -->
+        <div class="roadmap-card">
+          <div class="roadmap-header">
+            <span class="badge badge-emerald">COMPLETED</span>
+            <span style="font-family: var(--font-mono); color: var(--text-muted);">Aug 2026</span>
+          </div>
+          <h3>v2.0.0 Architecture</h3>
+          <ul class="roadmap-list">
+            <li>✅ ยกเครื่องสถาปัตยกรรมใหม่ด้วย Tauri v2</li>
+            <li>✅ ระบบ Agent Swarm 4-Role Pipeline</li>
+            <li>✅ Live In-App Web Preview</li>
+            <li>✅ Side-by-Side Visual Diff Viewer</li>
+          </ul>
+        </div>
+
+        <!-- v2.0.2 (Current) -->
+        <div class="roadmap-card active-version">
+          <div class="roadmap-header">
+            <span class="badge badge-cyan">CURRENT RELEASE</span>
+            <span style="font-family: var(--font-mono); color: var(--accent-cyan);">v2.0.2</span>
+          </div>
+          <h3>v2.0.2 Native Installers</h3>
+          <ul class="roadmap-list">
+            <li>✅ ย้าย Yurachi Chibi Dock ไปไว้ด้านขวาล่าง</li>
+            <li>✅ ตัวติดตั้ง Native macOS (.dmg) พร้อม Custom Background</li>
+            <li>✅ ตัวติดตั้ง Native Windows (.exe) NSIS ผ่าน Parallels VM</li>
+            <li>✅ OmniRoute Smart Auto-Retry & Inactivity Watchdog</li>
+            <li>✅ ปรับแต่งเสียงเอฟเฟกต์ใน Settings (Web Audio)</li>
+          </ul>
+        </div>
+
+        <!-- v2.1 (In Progress) -->
+        <div class="roadmap-card">
+          <div class="roadmap-header">
+            <span class="badge badge-purple">IN PROGRESS</span>
+            <span style="font-family: var(--font-mono); color: var(--accent-purple);">Q4 2026</span>
+          </div>
+          <h3>v2.1.0 Ecosystem</h3>
+          <ul class="roadmap-list">
+            <li>🚧 <strong>Local Model Auto-Discovery</strong>: เชื่อมต่อ Ollama และ LM Studio อัตโนมัติ</li>
+            <li>🚧 <strong>Plugin & Skill Hub</strong>: ระบบ Extension เพิ่มเครื่องมือใหม่ให้ Agent</li>
+            <li>🚧 <strong>Split-pane Terminal</strong>: รองรับการเปิดหลายแท็บเทอร์มินัลพร้อมกัน</li>
+          </ul>
+        </div>
+
+        <!-- v2.2 (Future) -->
+        <div class="roadmap-card">
+          <div class="roadmap-header">
+            <span class="badge" style="background: rgba(255, 255, 255, 0.05); color: var(--text-muted);">FUTURE</span>
+            <span style="font-family: var(--font-mono); color: var(--text-muted);">2027</span>
+          </div>
+          <h3>v2.2.0 Voice & Swarm Rooms</h3>
+          <ul class="roadmap-list">
+            <li>🔮 <strong>Voice Interactive Mascot</strong>: พูดคุยและสั่งงานด้วยเสียงแบบ Real-time พร้อม Anime TTS</li>
+            <li>🔮 <strong>Collaborative Agent Rooms</strong>: เชื่อมต่อหลายเครื่องเพื่อร่วมกันแก้โค้ดชิ้นใหญ่</li>
+            <li>🔮 <strong>Mobile Companion App</strong>: ตรวจสอบสถานะการรันผ่านสมาร์ทโฟน</li>
+          </ul>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- Supporters & Community Section -->
+  <section class="section" id="supporters">
+    <div class="container">
+      <div class="support-box">
+        <span class="badge badge-cyan" style="margin-bottom: 16px;">COMMUNITY & SUPPORTERS</span>
+        <h3>ร่วมเป็นส่วนหนึ่งและสนับสนุน Project Alisa</h3>
+        <p>
+          Project Alisa Studio พัฒนาขึ้นด้วยความตั้งใจที่จะมอบเครื่องมือเขียนโค้ดอัตโนมัติที่ดีที่สุดให้แก่นักพัฒนาทุกคนโดยไม่มีค่าใช้จ่าย คุณสามารถร่วมสนับสนุนผู้พัฒนาได้โดยตรงผ่าน Donate Website เพื่อเป็นกำลังใจในการพัฒนาฟีเจอร์ใหม่ๆ
+        </p>
+
+        <div class="support-actions">
+          <a href="https://donate-naygolf.netlify.app" target="_blank" rel="noopener noreferrer" class="btn btn-purple" style="background: linear-gradient(135deg, #ec4899 0%, #a855f7 100%); font-size: 1.1rem; padding: 14px 28px; box-shadow: 0 4px 25px rgba(236, 72, 153, 0.45);">
+            ☕ ร่วมสนับสนุนผู้พัฒนา (Donate Website)
+          </a>
+          <a href="https://github.com/KCCHDEV/project-alisa-studio" target="_blank" rel="noopener noreferrer" class="btn btn-primary">
+            ⭐ กด Star บน GitHub
+          </a>
+          <a href="https://github.com/KCCHDEV/project-alisa-studio/issues" target="_blank" rel="noopener noreferrer" class="btn btn-secondary">
+            💡 แจ้งปัญหา / เสนอฟีเจอร์ใหม่
+          </a>
+        </div>
+        <div style="margin-top: 20px; font-size: 0.85rem; color: var(--text-muted);">
+          💳 รองรับการสนับสนุนผ่าน PromptPay, TrueMoney, บัตรเครดิต/เดบิต และช่องทางสากลที่ <a href="https://donate-naygolf.netlify.app" target="_blank" rel="noopener noreferrer" style="color: var(--accent-pink); text-decoration: underline;">donate-naygolf.netlify.app</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ Section -->
+  <section class="section" id="faq">
+    <div class="container">
+      <div class="section-header">
+        <span class="badge badge-cyan">QUESTIONS & ANSWERS</span>
+        <h2 class="section-title">คำถามที่พบบ่อย (FAQ)</h2>
+        <p class="section-subtitle">รวมทุกข้อสงสัยเกี่ยวกับการติดตั้งและการใช้งาน</p>
+      </div>
+
+      <div class="faq-grid">
+        <details class="faq-item" open>
+          <summary class="faq-summary">
+            <span>โปรแกรมนี้ฟรีจริงไหม มีค่าใช้จ่ายแอบแฝงหรือไม่?</span>
+            <span>▾</span>
+          </summary>
+          <div class="faq-content">
+            ฟรีและเป็นโอเพนซอร์ส 100% ภายใต้สัญญาอนุญาต MIT คุณสามารถดาวน์โหลดไปใช้งาน ปรับแต่ง หรือศึกษาโค้ดได้ตามต้องการ ค่าใช้จ่ายเพียงอย่างเดียวที่คุณอาจมีคือค่า Token ของ API โมเดล AI ที่คุณเลือกนำมาเชื่อมต่อ (เช่น Google AI Studio, OpenAI หรือ OmniRoute) หรือหากใช้ Ollama/Local LLM ในเครื่องตัวเองก็จะฟรีทั้งหมดครับ
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary class="faq-summary">
+            <span>บน macOS เปิดโปรแกรมไม่ได้ ขึ้นฟ้องว่าไม่สามารถตรวจสอบความปลอดภัยได้?</span>
+            <span>▾</span>
+          </summary>
+          <div class="faq-content">
+            เนื่องจากเรายังไม่ได้จ่ายค่าใบรับรององค์กรรายปีของ Apple ระบบ Gatekeeper จึงจะแจ้งเตือนเมื่อเปิดครั้งแรก ให้ทำดังนี้: <strong>คลิกขวาที่ตัวแอป Project Alisa Studio V2 &gt; เลือก Open &gt; กดยืนยัน Open</strong> หรือไปที่ System Settings &gt; Privacy & Security &gt; กด <em>"Open Anyway"</em> ครั้งเดียวก็เปิดใช้งานได้ตลอดไปครับ
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary class="faq-summary">
+            <span>บน Windows ทำไม Windows Defender หรือ SmartScreen ถึงแจ้งเตือน?</span>
+            <span>▾</span>
+          </summary>
+          <div class="faq-content">
+            ตัวติดตั้ง .exe สร้างขึ้นด้วย NSIS ที่คอมไพล์ใหม่สดๆ จากซอร์สโค้ด จึงยังไม่มีคะแนนชื่อเสียงในฐานข้อมูลของ Microsoft SmartScreen ให้กดปุ่ม <strong>"More info" (ข้อมูลเพิ่มเติม) &gt; แล้วกดปุ่ม "Run anyway" (เรียกใช้ต่อไป)</strong> ก็จะสามารถติดตั้งได้ตามปกติครับ
+          </div>
+        </details>
+
+        <details class="faq-item">
+          <summary class="faq-summary">
+            <span>เสียงเอฟเฟกต์น่ารักมาก แต่ถ้าต้องการปิดหรือปรับระดับเสียง ทำได้ที่ไหน?</span>
+            <span>▾</span>
+          </summary>
+          <div class="faq-content">
+            สามารถกดไอคอนลำโพงที่มุมขวาบนของแผง Inspector ด้านขวา หรือเข้าไปที่เมนูการตั้งค่า (Settings) จะมีแถบเลื่อนปรับระดับเสียง (Volume Slider) ตั้งแต่ 0% ถึง 100% และปุ่มทดสอบเสียง ซึ่งระบบจะจดจำค่าไว้ตลอดการใช้งานครับ
+          </div>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <img src="./assets/icon.png" alt="Logo" style="width: 28px; height: 28px;">
+            <strong style="font-family: var(--font-heading); font-size: 1.1rem;">PROJECT ALISA STUDIO</strong>
+          </div>
+          <p>
+            Autonomous AI Desktop IDE with Real-Time Anime Companion Swarm. สร้างสรรค์เพื่อส่งมอบประสบการณ์การเขียนโค้ดยุคใหม่อย่างแท้จริง
+          </p>
+        </div>
+
+        <div class="footer-col">
+          <h5>เนื้อหา</h5>
+          <ul class="footer-links">
+            <li><a href="#showcase">รูปการใช้งานจริง</a></li>
+            <li><a href="#architecture">สถาปัตยกรรม</a></li>
+            <li><a href="#recommendations">คำแนะนำตรงๆ</a></li>
+            <li><a href="#roadmap">Roadmap</a></li>
+          </ul>
+        </div>
+
+        <div class="footer-col">
+          <h5>ลิงก์ภายนอก</h5>
+          <ul class="footer-links">
+            <li><a href="https://donate-naygolf.netlify.app" target="_blank" rel="noopener noreferrer" style="color: #f472b6;">☕ ร่วมสนับสนุน (Donate)</a></li>
+            <li><a href="https://github.com/KCCHDEV/project-alisa-studio" target="_blank" rel="noopener noreferrer">GitHub Repository</a></li>
+            <li><a href="https://github.com/KCCHDEV/project-alisa-studio/releases" target="_blank" rel="noopener noreferrer">Release Notes</a></li>
+            <li><a href="https://github.com/KCCHDEV/project-alisa-studio/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">MIT License</a></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="footer-bottom">
+        <span>&copy; 2026 Project Alisa Studio. Released under the MIT License.</span>
+        <span>Made with ❤️ for Developers & Creators</span>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Web Audio Synthesis & Interactive Scripts -->
+  <script>
+    // Procedural Web Audio Synthesizer (Zero external dependencies)
+    class ProceduralAudio {
+      constructor() {
+        this.ctx = null;
+        this.enabled = true;
+      }
+
+      init() {
+        if (!this.ctx) {
+          const AudioContext = window.AudioContext || window.webkitAudioContext;
+          this.ctx = new AudioContext();
+        }
+        if (this.ctx.state === 'suspended') {
+          this.ctx.resume();
+        }
+      }
+
+      playPop() {
+        if (!this.enabled) return;
+        this.init();
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        const now = this.ctx.currentTime;
+
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(587.33, now); // D5
+        osc.frequency.exponentialRampToValueAtTime(880.00, now + 0.08); // A5
+
+        gain.gain.setValueAtTime(0.3, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+
+        osc.start(now);
+        osc.stop(now + 0.16);
+      }
+
+      playSuccess() {
+        if (!this.enabled) return;
+        this.init();
+        const now = this.ctx.currentTime;
+        const notes = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
+
+        notes.forEach((freq, idx) => {
+          const osc = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+          const startTime = now + (idx * 0.07);
+
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(freq, startTime);
+
+          gain.gain.setValueAtTime(0.25, startTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.25);
+
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+
+          osc.start(startTime);
+          osc.stop(startTime + 0.26);
+        });
+      }
+    }
+
+    const audio = new ProceduralAudio();
+
+    // Sound toggle handler
+    const sfxBtn = document.getElementById('sfx-toggle');
+    const sfxIcon = document.getElementById('sfx-icon');
+    sfxBtn.addEventListener('click', () => {
+      audio.enabled = !audio.enabled;
+      sfxIcon.textContent = audio.enabled ? '🔊' : '🔇';
+      if (audio.enabled) audio.playPop();
+    });
+
+    // Interactive Mascot Expression Picker
+    const mascotImg = document.getElementById('mascot-img');
+    const mascotBubble = document.getElementById('mascot-bubble');
+    const exprBtns = document.querySelectorAll('.expr-btn');
+
+    exprBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        exprBtns.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+
+        const imgSrc = btn.getAttribute('data-img');
+        const quote = btn.getAttribute('data-quote');
+        const expr = btn.getAttribute('data-expr');
+
+        mascotImg.src = imgSrc;
+        mascotBubble.textContent = quote;
+
+        // Bounce animation
+        mascotImg.style.transform = 'scale(1.15) rotate(' + (Math.random() > 0.5 ? 4 : -4) + 'deg)';
+        setTimeout(() => {
+          mascotImg.style.transform = '';
+        }, 200);
+
+        if (expr === 'success') {
+          audio.playSuccess();
+        } else {
+          audio.playPop();
+        }
+      });
+    });
+
+    // Click on avatar directly
+    mascotImg.addEventListener('click', () => {
+      audio.playPop();
+      const randomQuotes = [
+        "เคาะเบาๆ สิคะ ยูราจิกำลังคุม Agent Swarm อยู่นะ! ✨",
+        "พร้อมลุยฟังก์ชันถัดไปหรือยังคะ? 🚀",
+        "ความเร็วของ Bun นี่มันสุดยอดจริงๆ เลยเนอะ! ⚡",
+        "อย่าลืมตรวจเช็ค Diff ก่อนกด Commit นะคะ 🧐"
+      ];
+      mascotBubble.textContent = randomQuotes[Math.floor(Math.random() * randomQuotes.length)];
+      mascotImg.style.transform = 'scale(1.18) rotate(-5deg)';
+      setTimeout(() => { mascotImg.style.transform = ''; }, 200);
+    });
+
+    // Showcase Tabs
+    const tabBtns = document.querySelectorAll('.showcase-tab-btn');
+    const panels = document.querySelectorAll('.showcase-panel');
+
+    tabBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        tabBtns.forEach(b => b.classList.remove('active'));
+        panels.forEach(p => p.classList.remove('active'));
+
+        btn.classList.add('active');
+        const targetId = btn.getAttribute('data-tab');
+        const targetPanel = document.getElementById(targetId);
+        if (targetPanel) {
+          targetPanel.classList.add('active');
+        }
+        audio.playPop();
+      });
+    });
+  </script>
+</body>
+</html>

@@ -980,16 +980,22 @@ export default function AppV2() {
   const [approval, setApproval] = useState<ApprovalRequest | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window === 'undefined' || window.innerWidth >= 1024);
   const [inspectorOpen, setInspectorOpen] = useState(true);
-  const [sidebarTab, setSidebarTab] = useState<SidebarTab>('chats');
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>(() => (typeof window !== 'undefined' && window.location.search.includes('tab=files')) ? 'files' : 'chats');
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('plan');
   const [search, setSearch] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [fileSearch, setFileSearch] = useState('');
   const [git, setGit] = useState<GitState | null>(null);
-  const [selectedDiffFile, setSelectedDiffFile] = useState<string | null>(null);
-  const [webPreviewOpen, setWebPreviewOpen] = useState(false);
-  const [templateModalOpen, setTemplateModalOpen] = useState(false);
+  const [selectedDiffFile, setSelectedDiffFile] = useState<string | null>(() => {
+    if (typeof window !== 'undefined' && window.location.search.includes('modal=diff')) {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('diffFile') || 'scripts/windows-package.bat';
+    }
+    return null;
+  });
+  const [webPreviewOpen, setWebPreviewOpen] = useState(() => typeof window !== 'undefined' && window.location.search.includes('modal=preview'));
+  const [templateModalOpen, setTemplateModalOpen] = useState(() => typeof window !== 'undefined' && window.location.search.includes('modal=templates'));
   const [workspaceError, setWorkspaceError] = useState('');
   const [selectedFile, setSelectedFile] = useState('');
   const [openFiles, setOpenFiles] = useState<string[]>([]);
@@ -1000,13 +1006,13 @@ export default function AppV2() {
   const [terminalCommand, setTerminalCommand] = useState('');
   const [terminalOutput, setTerminalOutput] = useState('');
   const [terminalRunning, setTerminalRunning] = useState(false);
-  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalOpen, setTerminalOpen] = useState(() => typeof window !== 'undefined' && window.location.search.includes('terminal=1'));
   const [terminalPreferredKind, setTerminalPreferredKind] = useState<'local' | 'ssh'>('local');
   const [terminalSessions, setTerminalSessions] = useState<TerminalSessionView[]>([]);
   const [activeTerminalSessionId, setActiveTerminalSessionId] = useState('');
   const [terminalError, setTerminalError] = useState('');
   const [showProjectMenu, setShowProjectMenu] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
+  const [showSettings, setShowSettings] = useState(() => typeof window !== 'undefined' && window.location.search.includes('modal=settings'));
   const [settingsProviderId, setSettingsProviderId] = useState('');
   const [providerName, setProviderName] = useState('');
   const [providerBaseURL, setProviderBaseURL] = useState('');
