@@ -11,6 +11,7 @@ import * as path from 'path';
 import { spawn } from 'child_process';
 import { Agent } from '../core/agent.ts';
 import { SwarmRunner } from '../core/swarm.ts';
+import { TaskSupervisor } from '../core/supervisor.ts';
 import { LLMClient, type LLMConfig } from '../llm/client.ts';
 import type { AgentEvent, AgentMode, AgentStatus, Goal, SwarmAgent } from '../core/types.ts';
 import { getTxManager, writeFileTool } from '../tools/file-ops.ts';
@@ -229,6 +230,8 @@ const DEFAULT_PROVIDERS: ProviderProfile[] = [
   },
 ];
 
+const isTestEnv = typeof process !== 'undefined' && (Boolean(process.env?.NODE_ENV === 'test') || Boolean(process.env?.BUN_TEST));
+
 let currentConfig: AppConfig = {
   apiKey: DEFAULT_PROVIDERS[0].apiKey,
   baseURL: DEFAULT_PROVIDERS[0].baseURL,
@@ -238,6 +241,7 @@ let currentConfig: AppConfig = {
   activeProviderId: DEFAULT_PROVIDERS[0].id,
   providers: DEFAULT_PROVIDERS,
   yoloMode: false,
+  maxRetries: isTestEnv ? 1 : 100,
 };
 
 function cloneConfig(config: AppConfig = currentConfig): AppConfig {
@@ -1422,57 +1426,114 @@ wss.on('connection', (ws: WebSocket) => {
       };
       try {
         const skillNames = Array.isArray(msg.skills) ? msg.skills.filter((s: unknown) => typeof s === 'string') : [];
-        if (useSwarm) {
-          const userMessage = {
-            id: `msg_user_${Date.now()}`,
-            role: 'user' as const,
-            content: msg.prompt.trim(),
-            timestamp: Date.now(),
-          };
-          session.messages.push(userMessage);
-          sessions.save(session);
-          broadcast({ type: 'message_added', message: userMessage });
-          swarmRunner = new SwarmRunner({
-            cwd: workspace,
-            sessionId: session.id,
-            prompt: msg.prompt.trim(),
-            history: [...session.messages],
-            skillNames,
-            llmConfig: { ...currentConfig, model: requestedModel },
-            contextWindow,
-            autoApprove: useYolo,
-            goal: session.goal,
-            requestApproval,
-            onEvent: handleAgentEvent,
-            onGoalUpdate: goal => { session.goal = goal; sessions.save(session); },
-            onAgentCreated: worker => activeAgents.push(worker),
-          });
-          const result = await swarmRunner.run();
-          activeTaskStates.set(workspace, { ...activeTaskStates.get(workspace)!, status: result.status, detail: result.detail });
-        } else {
-          agent = new Agent({
-            cwd: workspace,
-            sessionId: session.id,
-            mode,
-            goal: session.goal,
-            contextWindow,
-            autoApprove: useYolo,
-            requestApproval,
-            llm: new LLMClient({ ...currentConfig, model: requestedModel }),
-            onEvent: handleAgentEvent,
-          });
-          activeAgents.push(agent);
-          await agent.runTask(msg.prompt.trim(), [...session.messages], skillNames);
+        const userMessage = {
+          id: `msg_user_${Date.now()}`,
+          role: 'user' as const,
+          content: msg.prompt.trim(),
+          timestamp: Date.now(),
+        };
+        session.messages.push(userMessage);
+        sessions.save(session);
+        broadcast({ type: 'message_added', message: userMessage });
+
+        const supervisor = new TaskSupervisor({
+          llmConfig: { ...currentConfig, model: requestedModel },
+        });
+
+        let supervisorRound = 0;
+        const maxSupervisorRounds = typeof msg.maxSupervisorRounds === 'number' ? msg.maxSupervisorRounds : (isTestEnv ? 0 : 5);
+        let currentPrompt = msg.prompt.trim();
+
+        while (true) {
+          if (useSwarm) {
+            const effectiveRetries = typeof currentConfig.maxRetries === 'number'
+              ? currentConfig.maxRetries
+              : (isTestEnv ? 1 : 100);
+            swarmRunner = new SwarmRunner({
+              cwd: workspace,
+              sessionId: session.id,
+              prompt: currentPrompt,
+              history: [...session.messages],
+              skillNames,
+              llmConfig: { ...currentConfig, model: requestedModel, maxRetries: effectiveRetries },
+              contextWindow,
+              autoApprove: useYolo,
+              maxRetries: effectiveRetries,
+              goal: session.goal,
+              requestApproval,
+              onEvent: handleAgentEvent,
+              onGoalUpdate: goal => { session.goal = goal; sessions.save(session); },
+              onAgentCreated: worker => activeAgents.push(worker),
+            });
+            const result = await swarmRunner.run();
+            activeTaskStates.set(workspace, { ...activeTaskStates.get(workspace)!, status: result.status, detail: result.detail });
+          } else {
+            const effectiveRetries = typeof currentConfig.maxRetries === 'number'
+              ? currentConfig.maxRetries
+              : (isTestEnv ? 1 : 100);
+            agent = new Agent({
+              cwd: workspace,
+              sessionId: session.id,
+              mode,
+              goal: session.goal,
+              contextWindow,
+              autoApprove: useYolo,
+              maxRetries: effectiveRetries,
+              requestApproval,
+              llm: new LLMClient({ ...currentConfig, model: requestedModel, maxRetries: effectiveRetries }),
+              onEvent: handleAgentEvent,
+            });
+            activeAgents.push(agent);
+            await agent.runTask(currentPrompt, [...session.messages], skillNames);
+          }
+
+          // Check if task was aborted by user
+          const isCancelled = agent?.getStatus() === 'idle' || activeTaskStates.get(workspace)?.status === 'idle';
+          if (isCancelled || supervisorRound >= maxSupervisorRounds) {
+            break;
+          }
+
+          // Supervisor completion check ("ไล่เช็คงานยังไม่เสร็จก็สั่งงานต่อให้ไปอัตโนมัติ")
+          const assessment = await supervisor.assessCompletion(msg.prompt.trim(), session.messages, session.goal);
+          if (assessment.needsContinuation && assessment.nextDirective) {
+            supervisorRound++;
+            const directive = assessment.nextDirective;
+            const supervisorMessage = {
+              id: `msg_supervisor_${Date.now()}`,
+              role: 'user' as const,
+              content: directive,
+              timestamp: Date.now(),
+              metadata: { supervisor: true, supervisorRound, directiveType: 'continuation' as const },
+            };
+            session.messages.push(supervisorMessage);
+            sessions.save(session);
+            broadcast({ type: 'message_added', message: supervisorMessage });
+            broadcast({
+              type: 'supervisor_intervention',
+              directive,
+              reason: 'incomplete',
+            });
+            broadcast({
+              type: 'status_change',
+              status: 'self_correcting',
+              detail: `👑 Supervisor สั่งงานต่ออัตโนมัติ (รอบที่ ${supervisorRound}/${maxSupervisorRounds}): ${assessment.reason}`,
+            });
+            currentPrompt = directive;
+            activeAgents = [];
+            swarmRunner = undefined;
+            agent = undefined;
+            continue;
+          }
+
+          // Task completed!
+          break;
         }
       } finally {
-        const finalStatus = swarmRunner?.getAgents().some(worker => worker.status === 'error')
-          ? 'error'
-          : swarmRunner
-            ? (activeTaskStates.get(workspace)?.status || 'done')
-            : (agent?.getStatus() || 'error');
-        const finalDetail = swarmRunner
-          ? (activeTaskStates.get(workspace)?.detail || (finalStatus === 'done' ? 'Completed' : 'Agent swarm stopped'))
-          : finalStatus === 'done' ? 'Completed' : finalStatus === 'idle' ? 'Cancelled' : activeTaskStates.get(workspace)?.detail;
+        const taskState = activeTaskStates.get(workspace);
+        const finalStatus = swarmRunner
+          ? (taskState?.status || 'done')
+          : (agent?.getStatus() || (taskState?.status ?? 'error'));
+        const finalDetail = taskState?.detail || (finalStatus === 'done' ? 'Completed' : finalStatus === 'idle' ? 'Cancelled' : 'Task completed');
         const durationMs = Math.max(0, Date.now() - startedAt);
         const completedAt = Date.now();
         const lastRun: SavedRun = { status: finalStatus, detail: finalDetail, durationMs, completedAt };

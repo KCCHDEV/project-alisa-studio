@@ -1,9 +1,10 @@
 import { discoverSkills } from './skills';
 import { ToolRegistry } from '../tools/registry.ts';
-import { LLMClient } from '../llm/client.ts';
+import { LLMClient, isRetryableError } from '../llm/client.ts';
 import { ContextManager, estimateMessageTokens, type ActiveSkill } from './context.ts';
 import { ContextCompactor } from './compactor.ts';
 import { loadProjectInstructions } from './instructions.ts';
+import { TaskSupervisor } from './supervisor.ts';
 import type { Goal, Message, AgentEvent, AgentMode, AgentStatus, ToolCall } from './types.ts';
 
 export interface AgentOptions {
@@ -11,6 +12,7 @@ export interface AgentOptions {
   llm: LLMClient;
   toolRegistry?: ToolRegistry;
   maxIterations?: number;
+  maxRetries?: number;
   mode?: AgentMode;
   sessionId?: string;
   goal?: Goal;
@@ -22,6 +24,8 @@ export interface AgentOptions {
   onEvent?: (event: AgentEvent) => void;
 }
 
+const isTestEnv = typeof process !== 'undefined' && (Boolean(process.env?.NODE_ENV === 'test') || Boolean(process.env?.BUN_TEST));
+
 export class Agent {
   private mode: AgentMode;
   private requestApproval?: AgentOptions['requestApproval'];
@@ -32,6 +36,7 @@ export class Agent {
   private contextManager: ContextManager;
   private compactor: ContextCompactor;
   private maxIterations: number;
+  private maxRetries: number;
   private onEvent?: (event: AgentEvent) => void;
   private sessionId: string;
   private goal?: Goal;
@@ -42,6 +47,8 @@ export class Agent {
   private currentAbortController: AbortController | null = null;
   private running = false;
   private status: AgentStatus = 'idle';
+  private statusDetail = '';
+  private supervisor = new TaskSupervisor();
 
   constructor(options: AgentOptions) {
     this.mode = options.mode || 'code';
@@ -52,7 +59,9 @@ export class Agent {
     this.tools = options.toolRegistry || new ToolRegistry();
     this.contextManager = new ContextManager();
     this.compactor = new ContextCompactor();
-    this.maxIterations = options.maxIterations || 25;
+    this.maxIterations = options.maxIterations || (isTestEnv ? 25 : 80);
+    const llmMaxRetries = (options.llm as any)?.getConfig?.()?.maxRetries;
+    this.maxRetries = options.maxRetries ?? (typeof llmMaxRetries === 'number' ? llmMaxRetries : (isTestEnv ? 1 : 100));
     this.onEvent = options.onEvent;
     this.sessionId = options.sessionId || 'current';
     this.goal = options.goal;
@@ -62,11 +71,16 @@ export class Agent {
 
   setStatus(status: AgentStatus, detail?: string) {
     this.status = status;
+    this.statusDetail = detail || '';
     this.emit({ type: 'status_change', status, detail });
   }
 
   getStatus(): AgentStatus {
     return this.status;
+  }
+
+  getStatusDetail(): string {
+    return this.statusDetail;
   }
 
   setWorkspace(cwd: string) {
@@ -103,17 +117,35 @@ export class Agent {
     this.isAborted = false;
     this.currentAbortController = new AbortController();
 
-    const userMessage: Message = {
-      id: `msg_user_${Date.now()}`,
-      role: 'user',
-      content: userPrompt,
-      timestamp: Date.now(),
-    };
+    function delayWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
+      return new Promise((resolve) => {
+        if (signal?.aborted) return resolve();
+        const timer = setTimeout(resolve, ms);
+        signal?.addEventListener('abort', () => {
+          clearTimeout(timer);
+          resolve();
+        }, { once: true });
+      });
+    }
 
-    const sessionMessages: Message[] = [...history, userMessage];
-    this.emit({ type: 'message_added', message: userMessage });
+    let sessionMessages: Message[];
+    const lastHistoryMsg = history.at(-1);
+    if (lastHistoryMsg && lastHistoryMsg.role === 'user' && lastHistoryMsg.content === userPrompt) {
+      sessionMessages = [...history];
+    } else {
+      const userMessage: Message = {
+        id: `msg_user_${Date.now()}`,
+        role: 'user',
+        content: userPrompt,
+        timestamp: Date.now(),
+      };
+      sessionMessages = [...history, userMessage];
+      this.emit({ type: 'message_added', message: userMessage });
+    }
+    this.supervisor.reset();
 
     let iteration = 0;
+    let cycleRetries = 0;
     try {
     while (iteration < this.maxIterations) {
       if (this.isAborted) break;
@@ -167,7 +199,7 @@ export class Agent {
             onRetry: (info) => {
               const seconds = Math.max(1, Math.round(info.delayMs / 1000));
               const shortErr = info.error.message.replace(/^LLM API Error \(\d+\):\s*/i, '').slice(0, 60);
-              const detail = `🔄 OmniRoute error (${shortErr}) กำลังลองใหม่อัตโนมัติ ${info.attempt}/${info.maxRetries} (${seconds}s)...`;
+              const detail = `🔄 OmniRoute / Model overload (${shortErr}) กำลังลองใหม่อัตโนมัติ ${info.attempt}/${info.maxRetries} (${seconds}s)...`;
               this.setStatus('thinking', detail);
               this.emit({
                 type: 'retry_attempt',
@@ -191,6 +223,28 @@ export class Agent {
       } catch (err: any) {
         if (this.isAborted) break;
         const errMsg = err.message || 'LLM execution failed';
+        const isAuthError = errMsg.includes('401') && (errMsg.includes('Unauthorized') || errMsg.includes('Invalid API key'));
+        const retryable = isRetryableError(err) || !isAuthError;
+        if (retryable && cycleRetries < this.maxRetries) {
+          cycleRetries++;
+          const waitMs = isTestEnv ? 5 : Math.min(10000, Math.round(1500 * Math.pow(1.25, cycleRetries - 1)));
+          const seconds = Math.max(1, Math.round(waitMs / 1000));
+          const detail = isRetryableError(err)
+            ? `🔄 OmniRoute / Model overload: กำลังลองใหม่รอบที่ ${cycleRetries}/${this.maxRetries} (${seconds}s)...`
+            : `🔄 กำลังลองใหม่อัตโนมัติรอบที่ ${cycleRetries}/${this.maxRetries} (${seconds}s)...`;
+          this.setStatus('self_correcting', detail);
+          this.emit({
+            type: 'retry_attempt',
+            attempt: cycleRetries,
+            maxRetries: this.maxRetries,
+            error: errMsg,
+            delayMs: waitMs,
+          });
+          await delayWithSignal(waitMs, this.currentAbortController?.signal);
+          iteration--;
+          continue;
+        }
+
         this.emit({ type: 'error', message: errMsg });
         this.setStatus('error', errMsg);
         
@@ -199,7 +253,7 @@ export class Agent {
           role: 'assistant',
           content: `[Error] เกิดข้อผิดพลาดในการเรียกโมเดล: ${errMsg}`,
           timestamp: Date.now(),
-          metadata: { error: true, retryable: true, model: this.getModelName() },
+          metadata: { error: true, retryable, model: this.getModelName() },
         };
         sessionMessages.push(errorAssistantMsg);
         this.emit({ type: 'message_added', message: errorAssistantMsg });
@@ -207,6 +261,23 @@ export class Agent {
       }
 
       if (!toolCalls.length && !currentResponseContent.trim()) {
+        if (cycleRetries < this.maxRetries && !this.isAborted) {
+          cycleRetries++;
+          const waitMs = isTestEnv ? 5 : Math.min(8000, Math.round(1000 * Math.pow(1.25, cycleRetries - 1)));
+          const seconds = Math.max(1, Math.round(waitMs / 1000));
+          this.setStatus('self_correcting', `⚠️ โมเดลตอบกลับว่างเปล่า (Empty answer): กำลังลองใหม่อัตโนมัติ ${cycleRetries}/${this.maxRetries} (${seconds}s)...`);
+          this.emit({
+            type: 'retry_attempt',
+            attempt: cycleRetries,
+            maxRetries: this.maxRetries,
+            error: 'Empty answer from provider',
+            delayMs: waitMs,
+          });
+          await delayWithSignal(waitMs, this.currentAbortController?.signal);
+          iteration--;
+          continue;
+        }
+
         const emptyMessage = 'The provider returned an empty answer. Retry the task or choose another model.';
         this.emit({ type: 'error', message: emptyMessage });
         this.setStatus('error', emptyMessage);
@@ -221,6 +292,9 @@ export class Agent {
         this.emit({ type: 'message_added', message: errorAssistantMsg });
         break;
       }
+
+      // Reset consecutive cycle retries upon successful model output
+      cycleRetries = 0;
 
       // Add assistant message to session
       const assistantMessage: Message = {
@@ -262,6 +336,26 @@ export class Agent {
           toolCallId: tc.id,
           args: parsedArgs,
         });
+
+        // Supervisor real-time drift detection ("งานเริ่มออกนอกลู่นอกทาง โทรสั่งงาน")
+        const drift = this.supervisor.recordToolCallAndCheckDrift(toolName, parsedArgs, userPrompt);
+        if (drift.hasDrift && drift.directive) {
+          this.emit({
+            type: 'supervisor_intervention',
+            directive: drift.directive,
+            reason: 'drift',
+          });
+          this.setStatus('self_correcting', '📞 Supervisor โทรสั่งงาน: ปรับทิศทางไม่ให้ออกนอกลู่ทาง');
+          const steeringMsg: Message = {
+            id: `msg_supervisor_steering_${Date.now()}_${tc.id}`,
+            role: 'user',
+            content: drift.directive,
+            timestamp: Date.now(),
+            metadata: { supervisor: true, directiveType: 'steering' },
+          };
+          sessionMessages.push(steeringMsg);
+          this.emit({ type: 'message_added', message: steeringMsg });
+        }
 
         const toolDef = this.tools.get(toolName);
         let toolOutputStr = '';
@@ -328,8 +422,47 @@ export class Agent {
       }
     }
 
-    if (!this.isAborted && iteration >= this.maxIterations && this.status !== 'done' && this.status !== 'error') {
-      this.setStatus('error', `Stopped after ${this.maxIterations} cycles. Review progress and continue the task.`);
+    // If the loop finished and the last message is a tool or there is no text report from assistant,
+    // give the model a final turn to summarize its work clearly.
+    const lastAsstWithContent = sessionMessages.slice().reverse().find(m => m.role === 'assistant' && m.content?.trim());
+    const needsSummary = !lastAsstWithContent || sessionMessages.at(-1)?.role === 'tool';
+    if (!this.isAborted && needsSummary) {
+      try {
+        const compResult = this.compactor.compactMessages(sessionMessages);
+        const preparedMessages = this.contextManager.prepareMessages(
+          compResult.compacted,
+          this.getWorkspaceContext(),
+          this.loadActiveSkills(skillNames),
+        );
+        preparedMessages.push({
+          id: `msg_summary_req_${Date.now()}`,
+          role: 'user',
+          content: 'Please provide a clear and concise final report summarizing the operations completed in the workspace, files created or modified, verification results, and current status.',
+          timestamp: Date.now(),
+        });
+        const finalResult = await this.llm.chatStream(preparedMessages, [], {
+          onToken: (delta) => this.emit({ type: 'token_stream', delta }),
+          onThought: (delta) => this.emit({ type: 'thought_stream', delta }),
+        }, this.currentAbortController?.signal);
+
+        if (finalResult.content.trim()) {
+          const finalAsstMsg: Message = {
+            id: `msg_asst_${Date.now()}`,
+            role: 'assistant',
+            content: finalResult.content,
+            timestamp: Date.now(),
+            metadata: { model: finalResult.model || this.getModelName() },
+          };
+          sessionMessages.push(finalAsstMsg);
+          this.emit({ type: 'message_added', message: finalAsstMsg });
+        }
+      } catch {
+        // Best effort summary
+      }
+    }
+
+    if (!this.isAborted && this.status !== 'error') {
+      this.setStatus('done', this.status === 'done' ? (this.statusDetail || 'Completed') : `Completed ${iteration} cycles.`);
     }
     if (this.isAborted) this.setStatus('idle', 'Cancelled');
     return sessionMessages;

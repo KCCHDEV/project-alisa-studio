@@ -40,18 +40,48 @@ export function isRetryableError(err: any): boolean {
     return false;
   }
 
-  // Non-retryable HTTP status codes
-  if (status === 401 || status === 403 || status === 404) return false;
-  if (status === 400 && !msg.includes('rate limit') && !msg.includes('overloaded')) return false;
-
-  // Retryable HTTP status codes: 429 (rate limit), 408 (timeout), 500, 502, 503, 504
-  if (status === 429 || status === 408 || (status && status >= 500 && status <= 599)) return true;
-
-  // Check error message patterns
-  if (
-    msg.includes('429') ||
+  // Non-retryable HTTP status codes (unless message explicitly indicates overload/rate limit)
+  const hasOverloadOrRateLimit =
+    msg.includes('overload') ||
     msg.includes('rate limit') ||
     msg.includes('too many requests') ||
+    msg.includes('capacity') ||
+    msg.includes('busy') ||
+    msg.includes('exhausted') ||
+    msg.includes('try again') ||
+    msg.includes('quota');
+
+  if ((status === 401 || status === 403 || status === 404) && !hasOverloadOrRateLimit) return false;
+  if (status === 400 && !hasOverloadOrRateLimit) return false;
+
+  // Retryable HTTP status codes:
+  // 429 (rate limit), 408 (timeout), 529 (site overloaded), 500..599 (502, 503, 504, Cloudflare 520-527)
+  if (
+    status === 429 ||
+    status === 408 ||
+    status === 529 ||
+    (status && status >= 500 && status <= 599)
+  ) {
+    return true;
+  }
+
+  // Check error message patterns for OmniRouter and provider overload / network failures
+  if (
+    msg.includes('429') ||
+    msg.includes('529') ||
+    msg.includes('rate limit') ||
+    msg.includes('too many requests') ||
+    msg.includes('overload') ||
+    msg.includes('capacity') ||
+    msg.includes('busy') ||
+    msg.includes('resource exhausted') ||
+    msg.includes('resource_exhausted') ||
+    msg.includes('quota') ||
+    msg.includes('temporarily unavailable') ||
+    msg.includes('temporarily degraded') ||
+    msg.includes('try again later') ||
+    msg.includes('please try again') ||
+    msg.includes('retry later') ||
     msg.includes('500') ||
     msg.includes('502') ||
     msg.includes('503') ||
@@ -60,6 +90,13 @@ export function isRetryableError(err: any): boolean {
     msg.includes('service unavailable') ||
     msg.includes('gateway timeout') ||
     msg.includes('gateway unavailable') ||
+    msg.includes('upstream error') ||
+    msg.includes('upstream connect') ||
+    msg.includes('all providers failed') ||
+    msg.includes('no available provider') ||
+    msg.includes('provider error') ||
+    msg.includes('cloudflare') ||
+    msg.includes('cf-ray') ||
     msg.includes('fetch failed') ||
     msg.includes('network') ||
     msg.includes('econnreset') ||
@@ -71,6 +108,7 @@ export function isRetryableError(err: any): boolean {
     msg.includes('incomplete tool call') ||
     msg.includes('malformed streaming data') ||
     msg.includes('provider stream failed') ||
+    msg.includes('empty response body') ||
     msg.includes('timed out')
   ) {
     return true;
@@ -141,7 +179,7 @@ export class LLMClient {
       baseURL: config.baseURL.replace(/\/+$/, ''),
       temperature: config.temperature ?? 0.2,
       maxTokens: config.maxTokens ?? 4096,
-      maxRetries: config.maxRetries ?? (isTestEnv ? 1 : 3),
+      maxRetries: config.maxRetries ?? (isTestEnv ? 1 : 20),
       retryDelayMs: config.retryDelayMs ?? (isTestEnv ? 10 : 1500),
       connectTimeoutMs: config.connectTimeoutMs ?? 45000,
       streamInactivityTimeoutMs: config.streamInactivityTimeoutMs ?? 25000,
@@ -169,7 +207,7 @@ export class LLMClient {
     callbacks: StreamCallbacks,
     signal?: AbortSignal
   ): Promise<{ content: string; thought: string; toolCalls: ToolCall[]; finishReason: string; model: string }> {
-    const maxAttempts = this.config.maxRetries ?? (isTestEnv ? 1 : 3);
+    const maxAttempts = this.config.maxRetries ?? (isTestEnv ? 1 : 100);
     const initialDelay = this.config.retryDelayMs ?? (isTestEnv ? 10 : 1500);
 
     let lastError: any;
@@ -179,7 +217,8 @@ export class LLMClient {
         return await this.executeChatStream(messages, tools, callbacks, signal);
       } catch (err: any) {
         lastError = err;
-        const retryable = isRetryableError(err);
+        const isAuthError = err?.message?.includes('401') && (err?.message?.includes('Unauthorized') || err?.message?.includes('Invalid API key'));
+        const retryable = isRetryableError(err) || !isAuthError;
         const hasMoreAttempts = attempt < maxAttempts;
 
         if (!hasMoreAttempts || !retryable || signal?.aborted) {
@@ -187,7 +226,7 @@ export class LLMClient {
         }
 
         callbacks.onResetPartialStream?.();
-        const delayMs = Math.min(12000, Math.round(initialDelay * Math.pow(1.8, attempt - 1) + Math.random() * 300));
+        const delayMs = Math.min(15000, Math.round(initialDelay * Math.pow(1.35, attempt - 1) + Math.random() * 400));
         callbacks.onRetry?.({ attempt, maxRetries: maxAttempts, error: err, delayMs, willRetry: true });
         await delayWithSignal(delayMs, signal);
       }

@@ -114,7 +114,16 @@ export const CompanionSuite: React.FC<CompanionSuiteProps> = ({
 
   // Update dynamic thought text
   useEffect(() => {
-    if (statusDetail && (statusDetail.includes('OmniRoute') || statusDetail.includes('retry') || statusDetail.includes('ลองใหม่') || statusDetail.includes('stalled') || statusDetail.includes('ขัดข้อง'))) {
+    if (statusDetail && (
+      statusDetail.includes('OmniRoute') ||
+      statusDetail.includes('retry') ||
+      statusDetail.includes('ลองใหม่') ||
+      statusDetail.includes('stalled') ||
+      statusDetail.includes('ขัดข้อง') ||
+      statusDetail.includes('Supervisor') ||
+      statusDetail.includes('โทรสั่งงาน') ||
+      statusDetail.includes('คุมงาน')
+    )) {
       setThought(statusDetail);
     } else if (status === 'error') {
       setThought(statusDetail || 'Uh-oh, encountered an error. Let me fix it! 🔍');
@@ -211,12 +220,20 @@ export const CompanionSuite: React.FC<CompanionSuiteProps> = ({
           </div>
           {/* Bubble tail */}
           <div className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 h-3 w-3 rotate-45 border-b border-r border-pink-500/25 bg-[#171426]" />
+          {busy && (
+            <div className="relative mt-2 h-1 w-full overflow-hidden rounded-full bg-black/40">
+              <div className="h-full w-2/5 bg-gradient-to-r from-pink-500 via-cyan-400 to-purple-400 animate-beam-runner shadow-[0_0_8px_#ec4899]" />
+            </div>
+          )}
         </div>
       </div>
 
       {/* Mascot Image with Glowing Aura */}
       <div className="relative group cursor-pointer my-1" onClick={handleMascotClick}>
         <div className={`absolute ${activeScaleConfig.aura} rounded-full bg-gradient-to-r from-pink-500/25 via-purple-500/20 to-sky-500/25 blur-2xl opacity-75 transition duration-500 group-hover:opacity-100 group-hover:scale-110`} />
+        {busy && (
+          <div className="pointer-events-none absolute -inset-3 rounded-full border border-pink-400/40 border-dashed animate-spin-slow opacity-80" />
+        )}
         <img
           key={companionPose}
           src={companionSrc}

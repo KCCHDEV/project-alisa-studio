@@ -5,6 +5,12 @@ test('isRetryableError correctly classifies errors', () => {
   expect(isRetryableError(new Error('LLM API Error (502): Bad Gateway'))).toBe(true);
   expect(isRetryableError(new Error('LLM API Error (429): Rate limit exceeded'))).toBe(true);
   expect(isRetryableError(new Error('LLM API Error (504): Gateway Timeout'))).toBe(true);
+  expect(isRetryableError(new Error('LLM API Error (529): Site is overloaded'))).toBe(true);
+  expect(isRetryableError(new Error('OmniRouter Error: model is overloaded, please try again'))).toBe(true);
+  expect(isRetryableError(new Error('upstream capacity exceeded'))).toBe(true);
+  expect(isRetryableError(new Error('server is busy'))).toBe(true);
+  expect(isRetryableError(new Error('resource exhausted: quota exceeded'))).toBe(true);
+  expect(isRetryableError(new Error('all providers failed to respond'))).toBe(true);
   expect(isRetryableError(new Error('fetch failed: Connection reset by peer'))).toBe(true);
   expect(isRetryableError(new Error('OmniRoute stream stalled: no data received for 25s'))).toBe(true);
   expect(isRetryableError(new Error('Provider stream ended before completion. Please retry.'))).toBe(true);
@@ -14,6 +20,46 @@ test('isRetryableError correctly classifies errors', () => {
   expect(isRetryableError(new Error('LLM API Error (403): Forbidden'))).toBe(false);
   expect(isRetryableError(new Error('LLM API Error (404): Model not found'))).toBe(false);
   expect(isRetryableError(new Error('Task aborted'))).toBe(false);
+});
+
+test('LLMClient auto-retries on 529 Overloaded and recovers', async () => {
+  let callCount = 0;
+  const retryEvents: any[] = [];
+  const server = Bun.serve({
+    port: 0,
+    fetch() {
+      callCount++;
+      if (callCount === 1) {
+        return new Response('Site Overloaded', { status: 529 });
+      }
+      return new Response(
+        'data: {"choices":[{"delta":{"content":"Overload cleared"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+        { headers: { 'Content-Type': 'text/event-stream' } }
+      );
+    },
+  });
+
+  try {
+    const client = new LLMClient({
+      baseURL: server.url.toString(),
+      apiKey: '',
+      model: 'test-overload',
+      maxRetries: 5,
+      retryDelayMs: 10,
+    });
+
+    const result = await client.chatStream([], [], {
+      onRetry: info => retryEvents.push(info),
+    });
+
+    expect(callCount).toBe(2);
+    expect(result.content).toBe('Overload cleared');
+    expect(retryEvents.length).toBe(1);
+    expect(retryEvents[0].attempt).toBe(1);
+    expect(retryEvents[0].maxRetries).toBe(5);
+  } finally {
+    server.stop(true);
+  }
 });
 
 test('LLMClient auto-retries on 502/429 and succeeds on subsequent attempt', async () => {

@@ -13,6 +13,8 @@ import {
   Circle,
   Clock3,
   Code2,
+  Cpu,
+  Crown,
   File,
   FileCode2,
   FilePlus2,
@@ -27,6 +29,7 @@ import {
   PanelLeft,
   PanelRight,
   Pencil,
+  PhoneCall,
   Pin,
   Play,
   Plus,
@@ -47,6 +50,7 @@ import {
   Wifi,
   WifiOff,
   X,
+  Zap,
 } from 'lucide-react';
 import type { AgentMode, AgentStatus, ContextUsage, Goal, GoalStatus, Message, PlanItem, SwarmAgent } from '../core/types.ts';
 import { AlisaAvatar } from './components/AlisaAvatar';
@@ -566,6 +570,7 @@ const FileTree = memo(function FileTree(props: {
   nodes: FileNode[];
   onOpen: (path: string) => void;
   query: string;
+  activeFilePath?: string;
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const matches = (node: FileNode): boolean => {
@@ -578,6 +583,7 @@ const FileTree = memo(function FileTree(props: {
     .sort((a, b) => Number(b.type === 'directory') - Number(a.type === 'directory') || a.name.localeCompare(b.name))
     .flatMap(node => {
       const isOpen = !collapsed.has(node.path);
+      const isActive = Boolean(props.activeFilePath && (node.path === props.activeFilePath || props.activeFilePath.endsWith('/' + node.name)));
       const row = (
         <button
           type="button"
@@ -587,12 +593,22 @@ const FileTree = memo(function FileTree(props: {
             if (next.has(node.path)) next.delete(node.path); else next.add(node.path);
             return next;
           }) : props.onOpen(node.path)}
-          className="group flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[11px] text-slate-400 transition hover:bg-white/[0.06] hover:text-slate-100"
+          className={`group flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[11px] transition ${
+            isActive
+              ? 'bg-cyan-500/15 text-cyan-200 border border-cyan-500/30 shadow-[0_0_12px_rgba(6,182,212,0.25)] font-medium'
+              : 'text-slate-400 hover:bg-white/[0.06] hover:text-slate-100'
+          }`}
           style={{ paddingLeft: (8 + depth * 14) + 'px' }}
         >
           {node.type === 'directory' ? (isOpen ? <ChevronDown className="h-3 w-3 text-slate-600" /> : <ChevronRight className="h-3 w-3 text-slate-600" />) : <span className="w-3" />}
           {fileIcon(node.name, node.type === 'directory')}
-          <span className="truncate">{node.name}</span>
+          <span className="truncate flex-1">{node.name}</span>
+          {isActive && (
+            <span className="ml-auto flex items-center gap-1 text-[9px] font-mono text-cyan-300 bg-cyan-950/90 border border-cyan-400/40 px-1.5 py-0.5 rounded-full shadow-[0_0_8px_#06b6d4]">
+              <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-ping" />
+              <span>ACTIVE</span>
+            </span>
+          )}
         </button>
       );
       return node.type === 'directory' && isOpen && node.children?.length ? [row, ...renderNodes(node.children, depth + 1)] : [row];
@@ -603,19 +619,205 @@ const FileTree = memo(function FileTree(props: {
 const ToolCard = memo(function ToolCard(props: { tool: ToolRun }) {
   const [open, setOpen] = useState(false);
   const tool = props.tool;
+  const isRunning = tool.status === 'running';
+  const isSuccess = tool.status === 'success';
+  const isError = tool.status === 'error';
+  const filePath = typeof tool.args?.path === 'string' ? tool.args.path : undefined;
+  const command = typeof tool.args?.command === 'string' ? tool.args.command : undefined;
+  const isFileAction = tool.toolName === 'write_file' || tool.toolName === 'patch_file';
+  const isTerminal = tool.toolName === 'terminal';
+
+  if (isRunning) {
+    return (
+      <div className="cyber-card-active relative my-2.5 overflow-hidden rounded-xl border border-cyan-500/40 bg-gradient-to-r from-[#071324]/95 via-[#0c1b36]/90 to-[#170e2b]/95 p-3.5 text-xs shadow-xl shadow-cyan-950/50">
+        {/* Top running laser beam ("แสงเลเซอร์วิ่งผ่าน") */}
+        <div className="absolute top-0 left-0 right-0 h-[2px] overflow-hidden pointer-events-none">
+          <div className="h-full w-2/5 bg-gradient-to-r from-transparent via-cyan-400 to-transparent animate-beam-runner shadow-[0_0_12px_#22d3ee]" />
+        </div>
+
+        {/* Ambient Hologram Shimmer */}
+        <div className="pointer-events-none absolute inset-0 animate-holo-shimmer opacity-25" />
+
+        <div className="relative flex flex-wrap items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-cyan-500/20 border border-cyan-400/40 text-cyan-300 shadow-[0_0_12px_rgba(6,182,212,0.4)]">
+              {isFileAction ? (
+                <Code2 className="h-4 w-4 animate-pulse text-cyan-300" />
+              ) : isTerminal ? (
+                <Terminal className="h-4 w-4 animate-pulse text-amber-300" />
+              ) : (
+                <Cpu className="h-4 w-4 animate-spin-slow text-violet-300" />
+              )}
+              <span className="absolute -top-1 -right-1 flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-80" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-400" />
+              </span>
+            </div>
+
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-semibold text-cyan-200 tracking-wide">
+                  {isFileAction
+                    ? tool.toolName === 'write_file'
+                      ? '⚡ กำลังสร้างและบันทึกไฟล์ (Writing File)...'
+                      : '⚡ กำลังแก้ไขโค้ด (Patching File)...'
+                    : isTerminal
+                      ? '🛠️ กำลังรัน Terminal / Build...'
+                      : `⚙️ กำลังประมวลผล ${toolLabel(tool)}...`}
+                </span>
+                {tool.agentRole && (
+                  <span className="rounded bg-white/10 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-slate-300">
+                    {tool.agentRole}
+                  </span>
+                )}
+              </div>
+              {filePath && (
+                <div className="mt-1 flex items-center gap-1.5 font-mono text-[11px] text-cyan-300">
+                  <span className="rounded bg-black/60 border border-cyan-500/30 px-2 py-0.5 max-w-[460px] truncate shadow-inner">
+                    📄 {filePath}
+                  </span>
+                </div>
+              )}
+              {command && (
+                <div className="mt-1 flex items-center gap-1.5 font-mono text-[11px] text-amber-300">
+                  <span className="rounded bg-black/60 border border-amber-500/30 px-2 py-0.5 max-w-[460px] truncate shadow-inner">
+                    $ {command}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Equalizer Wave ("เอฟเฟกต์วิ่งๆ") */}
+          <div className="flex items-center gap-2 shrink-0 bg-black/60 border border-cyan-500/30 rounded-lg px-2.5 py-1.5 shadow-[0_0_10px_rgba(6,182,212,0.2)]">
+            <div className="flex items-end gap-1 h-3.5">
+              <span className="w-1 bg-cyan-400 rounded-full equalizer-bar-1" />
+              <span className="w-1 bg-pink-400 rounded-full equalizer-bar-2" />
+              <span className="w-1 bg-cyan-300 rounded-full equalizer-bar-3" />
+              <span className="w-1 bg-purple-400 rounded-full equalizer-bar-4" />
+              <span className="w-1 bg-cyan-400 rounded-full equalizer-bar-5" />
+            </div>
+            <span className="font-mono text-[10px] text-cyan-300 uppercase tracking-widest hidden sm:inline">LIVE RUN</span>
+          </div>
+        </div>
+
+        {/* Bottom dual running laser line */}
+        <div className="relative mt-2.5 h-1 w-full overflow-hidden rounded-full bg-slate-900/90 border border-white/5">
+          <div className="h-full w-2/5 rounded-full bg-gradient-to-r from-transparent via-cyan-400 to-transparent animate-beam-runner shadow-[0_0_12px_#06b6d4]" />
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="tool-event mt-3 text-xs">
-      <button type="button" onClick={() => setOpen(value => !value)} className="tool-event-trigger flex w-full items-center gap-2 py-1 text-left text-slate-400 hover:text-slate-200">
-        {tool.status === 'running' ? <span className="terminal-status terminal-running">●</span> : tool.status === 'success' ? <span className="terminal-status terminal-success">✓</span> : <span className="terminal-status terminal-error">×</span>}
-        <span className="min-w-0 flex-1 truncate">{toolLabel(tool)}</span>
-        {tool.agentRole && <span className="shrink-0 text-[9px] uppercase tracking-[0.12em] text-slate-700">{tool.agentRole}</span>}
-        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+    <div className={"tool-event mt-2 text-xs rounded-lg border p-2.5 transition " + (isError ? "border-rose-500/30 bg-rose-950/15" : "border-white/[0.08] bg-white/[0.02] hover:bg-white/[0.04]")}>
+      <button type="button" onClick={() => setOpen(value => !value)} className="tool-event-trigger flex w-full items-center gap-2 text-left text-slate-300 hover:text-white">
+        {isSuccess ? (
+          <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 text-[10px] shadow-[0_0_8px_rgba(16,185,129,0.3)]">✓</span>
+        ) : isError ? (
+          <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-rose-500/20 text-rose-400 border border-rose-500/40 text-[10px]">×</span>
+        ) : (
+          <span className="terminal-status terminal-running">●</span>
+        )}
+        <div className="min-w-0 flex-1 truncate font-mono text-[11px]">
+          <span className="font-semibold text-slate-200">{toolLabel(tool)}</span>
+          {filePath && <span className="ml-2 text-cyan-300/80">{filePath}</span>}
+          {command && <span className="ml-2 text-amber-300/80">$ {command}</span>}
+        </div>
+        {tool.agentRole && <span className="shrink-0 rounded bg-white/5 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.12em] text-slate-400">{tool.agentRole}</span>}
+        {open ? <ChevronDown className="h-3.5 w-3.5 text-slate-400" /> : <ChevronRight className="h-3.5 w-3.5 text-slate-400" />}
       </button>
       {open && (
-        <div className="tool-output border-l border-white/[0.12] pl-4">
-          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-5 text-slate-500">{tool.error || tool.result || JSON.stringify(tool.args, null, 2)}</pre>
+        <div className="tool-output mt-2 border-l border-white/[0.12] pl-3">
+          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-5 text-slate-400">{tool.error || tool.result || JSON.stringify(tool.args, null, 2)}</pre>
         </div>
       )}
+    </div>
+  );
+});
+
+const LiveWorkspaceActivityBar = memo(function LiveWorkspaceActivityBar(props: {
+  busy: boolean;
+  statusDetail?: string;
+  tools: ToolRun[];
+}) {
+  if (!props.busy) return null;
+  const activeTool = props.tools.find(t => t.status === 'running') || props.tools.at(-1);
+  const filePath = typeof activeTool?.args?.path === 'string' ? activeTool.args.path : undefined;
+  const command = typeof activeTool?.args?.command === 'string' ? activeTool.args.command : undefined;
+  const isFile = activeTool?.toolName === 'write_file' || activeTool?.toolName === 'patch_file';
+
+  return (
+    <div className="cyber-card-active relative my-3 overflow-hidden rounded-xl border border-cyan-500/40 bg-gradient-to-r from-[#071324]/90 via-[#0d1c38]/85 to-[#160f2b]/90 p-3.5 shadow-2xl shadow-cyan-950/50 backdrop-blur-md">
+      {/* Top Running Laser Streak ("เอฟเฟกต์แสงเลเซอร์วิ่งผ่าน") */}
+      <div className="absolute top-0 left-0 right-0 h-[2px] overflow-hidden pointer-events-none">
+        <div className="h-full w-2/5 bg-gradient-to-r from-transparent via-cyan-400 to-transparent animate-beam-runner shadow-[0_0_12px_#22d3ee]" />
+      </div>
+
+      {/* Ambient Holo Shimmer */}
+      <div className="pointer-events-none absolute inset-0 animate-holo-shimmer opacity-25" />
+
+      <div className="relative flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-cyan-500/20 border border-cyan-400/40 text-cyan-300 shadow-[0_0_14px_rgba(6,182,212,0.45)]">
+            <Zap className="h-4 w-4 animate-bounce text-cyan-300" />
+            <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-80" />
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan-500" />
+            </span>
+          </div>
+
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold tracking-wide text-cyan-100">
+                {isFile ? '⚡ กำลังสร้างและคอมไพล์ไฟล์ (File Pipeline Active)' : '🚀 AI กำลังทำงาน (Workspace Operation Active)'}
+              </span>
+              <span className="flex items-center gap-1 rounded bg-cyan-950/80 border border-cyan-500/40 px-1.5 py-0.5 text-[9px] font-mono text-cyan-300">
+                <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                <span>RUNNING</span>
+              </span>
+            </div>
+            <div className="mt-1 flex items-center gap-2 text-[11px] text-slate-300">
+              <span className="truncate">{props.statusDetail || 'AI is executing commands...'}</span>
+            </div>
+            {filePath && (
+              <div className="mt-1.5 flex items-center gap-1.5 font-mono text-[11px] text-cyan-200">
+                <span className="rounded bg-black/60 border border-cyan-500/30 px-2 py-0.5 max-w-[480px] truncate shadow-inner">
+                  📄 {filePath}
+                </span>
+              </div>
+            )}
+            {command && (
+              <div className="mt-1.5 flex items-center gap-1.5 font-mono text-[11px] text-amber-200">
+                <span className="rounded bg-black/60 border border-amber-500/30 px-2 py-0.5 max-w-[480px] truncate shadow-inner">
+                  $ {command}
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Dynamic Running Pulse & Equalizer Bars */}
+        <div className="flex items-center gap-2 bg-black/60 border border-cyan-500/30 rounded-lg px-3 py-1.5 shadow-[0_0_10px_rgba(6,182,212,0.2)]">
+          <div className="flex items-end gap-1 h-4">
+            <span className="w-1 bg-cyan-400 rounded-full equalizer-bar-1" />
+            <span className="w-1 bg-pink-400 rounded-full equalizer-bar-2" />
+            <span className="w-1 bg-cyan-300 rounded-full equalizer-bar-3" />
+            <span className="w-1 bg-purple-400 rounded-full equalizer-bar-4" />
+            <span className="w-1 bg-cyan-400 rounded-full equalizer-bar-5" />
+          </div>
+          <div className="flex gap-1 text-[10px]">
+            <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 data-dot-1" />
+            <span className="h-1.5 w-1.5 rounded-full bg-pink-400 data-dot-2" />
+            <span className="h-1.5 w-1.5 rounded-full bg-purple-400 data-dot-3" />
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom dual running laser beam */}
+      <div className="relative mt-3 h-1 w-full overflow-hidden rounded-full bg-slate-900/90 border border-white/5">
+        <div className="h-full w-1/3 rounded-full bg-gradient-to-r from-cyan-500 via-pink-500 to-cyan-400 animate-beam-runner shadow-[0_0_12px_#06b6d4]" />
+      </div>
     </div>
   );
 });
@@ -628,7 +830,10 @@ const MessageBubble = memo(function MessageBubble(props: {
   onRetryTask?: () => void;
   onOpenModelMenu?: () => void;
 }) {
-  const isUser = props.message.role === 'user';
+  const isSupervisor = Boolean(props.message.metadata?.supervisor);
+  const directiveType = props.message.metadata?.directiveType;
+  const supervisorRound = props.message.metadata?.supervisorRound;
+  const isUser = props.message.role === 'user' && !isSupervisor;
   const isError = Boolean(props.message.metadata?.error);
   const relatedTools = (props.message.tool_calls || []).map(call => {
     const active = props.tools.find(tool => tool.toolCallId === call.id);
@@ -639,15 +844,67 @@ const MessageBubble = memo(function MessageBubble(props: {
     return { toolName: call.function.name, toolCallId: call.id, args, result: result?.content, error: result?.metadata?.error ? result.content : undefined, status: result?.metadata?.error ? 'error' : 'success' } as ToolRun;
   });
   return (
-    <div className={'terminal-message ' + (isUser ? 'terminal-user' : isError ? 'terminal-error-message' : 'terminal-assistant')}>
+    <div className={'terminal-message ' + (isSupervisor ? 'terminal-supervisor' : isUser ? 'terminal-user' : isError ? 'terminal-error-message' : 'terminal-assistant')}>
       <div className="terminal-message-head flex items-center gap-2 text-[10px] uppercase tracking-[0.14em]">
-        <span className="terminal-message-mark">{isUser ? '┃' : isError ? '!' : props.isStreaming ? '●' : ' '}</span>
-        <span>{isUser ? 'You' : 'Alisa'}</span>
-        {!isUser && props.message.metadata?.model && <span className="max-w-[260px] truncate normal-case tracking-normal text-slate-600" title={props.message.metadata.model}>via {props.message.metadata.model}</span>}
-        <span className="text-slate-700">{formatRelativeTime(props.message.timestamp)}</span>
+        {isSupervisor ? (
+          <>
+            <span className="terminal-message-mark text-amber-400 font-bold">{directiveType === 'steering' ? '📞' : '👑'}</span>
+            <span className="font-semibold text-amber-300">
+              {directiveType === 'steering' ? 'Supervisor โทรสั่งงาน' : `Lead Supervisor ${supervisorRound ? `(รอบตรวจงาน ${supervisorRound})` : ''}`}
+            </span>
+            <span className="rounded bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.5 text-[9px] text-amber-300 normal-case tracking-normal">
+              {directiveType === 'steering' ? '📞 Anti-Loop Steering' : '👑 Auto-Continuation'}
+            </span>
+            <span className="text-slate-700">{formatRelativeTime(props.message.timestamp)}</span>
+          </>
+        ) : (
+          <>
+            <span className="terminal-message-mark">{isUser ? '┃' : isError ? '!' : props.isStreaming ? '●' : ' '}</span>
+            <span>{isUser ? 'You' : 'Alisa'}</span>
+            {!isUser && props.message.metadata?.model && <span className="max-w-[260px] truncate normal-case tracking-normal text-slate-600" title={props.message.metadata.model}>via {props.message.metadata.model}</span>}
+            <span className="text-slate-700">{formatRelativeTime(props.message.timestamp)}</span>
+          </>
+        )}
       </div>
       <div className="terminal-message-body text-sm leading-6">
-        {isUser ? (
+        {isSupervisor ? (
+          <div className={`my-2 rounded-xl border p-4 text-xs shadow-lg ${
+            directiveType === 'steering'
+              ? 'border-amber-500/40 bg-gradient-to-br from-amber-950/30 via-slate-900/80 to-[#140f06] text-amber-100 shadow-[0_0_20px_rgba(245,158,11,0.12)]'
+              : 'border-yellow-500/40 bg-gradient-to-br from-yellow-950/25 via-slate-900/80 to-[#141208] text-yellow-100 shadow-[0_0_20px_rgba(234,179,8,0.12)]'
+          }`}>
+            <div className="flex items-center gap-2 font-medium mb-2.5 pb-2 border-b border-white/5">
+              {directiveType === 'steering' ? (
+                <>
+                  <PhoneCall className="h-4 w-4 shrink-0 text-amber-400 animate-pulse" />
+                  <div>
+                    <div className="text-amber-300 font-semibold tracking-wide">
+                      Supervisor แทรกแซงด่วน (โทรสั่งงานกลับสู่เป้าหมาย)
+                    </div>
+                    <div className="text-[11px] text-amber-400/70 font-normal">
+                      ตรวจพบการทำงานเริ่มออกนอกลู่นอกทาง หรือติดลูป — กำกับให้กลับเข้าสู่เป้าหมายหลัก
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <Crown className="h-4 w-4 shrink-0 text-yellow-400" />
+                  <div>
+                    <div className="text-yellow-300 font-semibold tracking-wide">
+                      Lead Supervisor สั่งงานต่ออัตโนมัติ
+                    </div>
+                    <div className="text-[11px] text-yellow-400/70 font-normal">
+                      ตรวจพบงานยังไม่เสร็จสมบูรณ์ / มีขั้นตอนค้าง — ส่งคำสั่งลุยงานต่อโดยอัตโนมัติ
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="text-slate-200">
+              <MarkdownRenderer content={props.message.content} />
+            </div>
+          </div>
+        ) : isUser ? (
           <div className="whitespace-pre-wrap">{props.message.content}</div>
         ) : isError ? (
           <div className="my-2 rounded-xl border border-rose-500/30 bg-rose-950/20 p-4 text-xs text-rose-200 shadow-lg">
@@ -1314,6 +1571,16 @@ export default function AppV2() {
       addActivity({ kind: 'status', label: `OmniRoute retry ${data.attempt}/${data.maxRetries}`, detail: data.error });
       return;
     }
+    if (data.type === 'supervisor_intervention') {
+      const isDrift = data.reason === 'drift';
+      addActivity({
+        kind: 'status',
+        label: isDrift ? '📞 Supervisor โทรสั่งงาน' : '👑 Lead Supervisor แทรกแซง',
+        detail: data.directive,
+      });
+      playChime('bubble');
+      return;
+    }
     if (data.type === 'token_stream' || data.type === 'token') {
       queueStreamingPaint('content', data.delta || data.token || '');
       return;
@@ -1351,11 +1618,17 @@ export default function AppV2() {
       const next: ToolRun = { toolName: data.toolName, toolCallId: data.toolCallId || String(Date.now()), args: data.args || {}, status: 'running', agentRole: data.agentRole };
       setToolRuns(previous => [...previous.filter(item => item.toolCallId !== next.toolCallId), next]);
       addActivity({ kind: 'tool', label: toolLabel(next), detail: JSON.stringify(next.args) });
+      if (data.toolName === 'write_file' || data.toolName === 'patch_file') {
+        playChime('click');
+      }
       return;
     }
     if (data.type === 'tool_call_end' || data.type === 'tool_end') {
       setToolRuns(previous => previous.map(item => item.toolCallId === data.toolCallId ? { ...item, result: String(data.result || ''), error: data.error, status: data.error ? 'error' : 'success', agentRole: data.agentRole || item.agentRole } : item));
       addActivity({ kind: data.error ? 'error' : 'tool', label: (data.error ? 'Failed: ' : 'Completed: ') + String(data.toolName || 'tool'), detail: data.error || undefined });
+      if (!data.error && (data.toolName === 'write_file' || data.toolName === 'patch_file')) {
+        playChime('bubble');
+      }
       scheduleFilesRefresh();
       return;
     }
@@ -1549,6 +1822,10 @@ export default function AppV2() {
     const fromTools = toolRuns.filter(tool => tool.toolName === 'write_file' || tool.toolName === 'patch_file').map(tool => String(tool.args.path || '')).filter(Boolean);
     return Array.from(new Set([...fromStatus, ...fromTools]));
   }, [git, toolRuns]);
+  const activeToolFile = useMemo(() => {
+    const active = toolRuns.find(tool => tool.status === 'running' && (tool.toolName === 'write_file' || tool.toolName === 'patch_file' || tool.toolName === 'read_file'));
+    return typeof active?.args?.path === 'string' ? active.args.path : undefined;
+  }, [toolRuns]);
   const companionPose = useMemo<CompanionPose>(() => {
     if (busy) return status === 'thinking' || status === 'self_correcting' ? 'thinking' : 'terminal';
     if (lastRun?.status === 'done') return 'success';
@@ -2380,7 +2657,7 @@ export default function AppV2() {
                 <div className="mb-2 flex items-center gap-2 rounded-xl border border-white/[0.08] bg-black/20 px-3 py-2 text-xs text-slate-500">
                   <Search className="h-3.5 w-3.5" /><input value={fileSearch} onChange={event => setFileSearch(event.target.value)} placeholder="Filter files" className="min-w-0 flex-1 bg-transparent text-xs text-slate-300 outline-none placeholder:text-slate-600" />
                 </div>
-                <FileTree nodes={fileTree} query={fileSearch} onOpen={path => void openFile(path)} />
+                <FileTree nodes={fileTree} query={fileSearch} onOpen={path => void openFile(path)} activeFilePath={activeToolFile} />
                 {!fileTree.length && <div className="px-3 py-10 text-center text-xs text-slate-600">No files found</div>}
               </div>
             )}
@@ -2469,7 +2746,7 @@ export default function AppV2() {
               {chatMessages.map(message => <MessageBubble key={message.id} message={message} messages={messages} tools={toolRuns} onRetryTask={retryLastPrompt} onOpenModelMenu={() => modelInputRef.current?.focus()} />)}
               {streamingContent && <MessageBubble message={{ id: 'streaming', role: 'assistant', content: streamingContent, timestamp: Date.now() }} messages={messages} tools={toolRuns} isStreaming onRetryTask={retryLastPrompt} onOpenModelMenu={() => modelInputRef.current?.focus()} />}
               {streamingThought && <div className="terminal-thought ml-5 border-l border-violet-300/20 pl-3 text-xs text-violet-200/60"><span className="mr-2 text-[10px] uppercase tracking-widest text-violet-300/50">Thought</span>{streamingThought}</div>}
-              {busy && !streamingContent && !streamingThought && <div className="terminal-working text-xs text-slate-500"><span className="terminal-status terminal-running">●</span><span>{statusDetail || 'Working…'}</span></div>}
+              <LiveWorkspaceActivityBar busy={busy} statusDetail={statusDetail} tools={toolRuns} />
               {approval && (
                 <div className="terminal-approval border-l border-amber-300/50 pl-4 text-xs">
                   <div className="flex items-center gap-2 text-amber-200"><ShieldCheck className="h-4 w-4" /><span>Permission required · {approval.action}</span></div>

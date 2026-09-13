@@ -77,6 +77,9 @@ export interface Message {
     cost?: number;
     error?: boolean;
     retryable?: boolean;
+    supervisor?: boolean;
+    supervisorRound?: number;
+    directiveType?: 'continuation' | 'steering';
   };
 }
 
@@ -119,6 +122,7 @@ export type AgentEvent =
   | ({ type: 'tool_call_start'; toolName: string; toolCallId: string; args: Record<string, any> } & AgentEventMeta)
   | ({ type: 'tool_call_end'; toolName: string; toolCallId: string; result: any; error?: string } & AgentEventMeta)
   | ({ type: 'approval_requested'; action: string; details: Record<string, any>; resolveId: string } & AgentEventMeta)
+  | ({ type: 'supervisor_intervention'; directive: string; reason: 'drift' | 'incomplete' | 'error' } & AgentEventMeta)
   | ({ type: 'message_added'; message: Message } & AgentEventMeta)
   | ({ type: 'session_updated'; activeFile?: string; modifiedFiles?: string[] } & AgentEventMeta)
   | ({ type: 'error'; message: string } & AgentEventMeta);
