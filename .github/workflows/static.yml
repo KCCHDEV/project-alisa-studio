@@ -1,43 +1,78 @@
-# Simple workflow for deploying static content to GitHub Pages
+# Publishes the static landing site in docs/ to GitHub Pages.
+#
+# Every failure mode below otherwise surfaces only as a generic
+# "Failed to deploy to github-pages" in the Deployments tab, so each one is
+# guarded explicitly:
+#   * docs/ empty or renamed   -> caught by the Preflight step before upload
+#   * Jekyll re-processing     -> .nojekyll publishes the files verbatim
+#   * one deploy at a time     -> concurrency group, never cancels in-flight
 name: Deploy static content to Pages
 
 on:
-  # Runs on pushes targeting the default branch
   push:
-    branches: ["main"]
-
-  # Allows you to run this workflow manually from the Actions tab
+    branches: ['main']
+    # Rebuild only when the published site or this workflow actually changed.
+    paths:
+      - 'docs/**'
+      - '.github/workflows/static.yml'
   workflow_dispatch:
 
-# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
 permissions:
   contents: read
   pages: write
   id-token: write
 
-# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
-# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
+# Keep a single production deploy at a time. Never cancel one that is already
+# publishing, otherwise the live site flaps between partial states.
 concurrency:
-  group: "pages"
+  group: 'pages'
   cancel-in-progress: false
 
 jobs:
-  # Single deploy job since we're just deploying
   deploy:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Preflight
+        run: |
+          set -euo pipefail
+          if [ ! -f docs/index.html ]; then
+            echo "::error::docs/index.html is missing, so upload-pages-artifact would have nothing to publish."
+            exit 1
+          fi
+          if [ -z "$(find docs -type f -name '*.html' -print -quit)" ]; then
+            echo "::error::No HTML file found under docs/ — there is no site to deploy."
+            exit 1
+          fi
+          # Without .nojekyll Pages would run the files through Jekyll, which
+          # rewrites them and silently drops anything it cannot parse.
+          touch docs/.nojekyll
+          echo "Publishing $(find docs -type f | wc -l) files ($(du -sh docs | cut -f1))"
+
       - name: Setup Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          # Upload entire repository
-          path: './docs'
+          # The whole docs/ folder is the site root, so index.html lives at /.
+          path: 'docs'
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
+
+# If this workflow keeps failing with "Failed to deploy to github-pages" while
+# the Preflight step passes, the cause is a repository setting rather than this
+# file. Check, in order:
+#   1. Settings -> Pages -> Build and deployment -> Source must be
+#      "GitHub Actions" (not "Deploy from a branch").
+#   2. Settings -> Environments -> github-pages must not restrict deployment
+#      branches to something other than `main`.
+#   3. The Actions tab will name the exact step; share that log if it persists.
