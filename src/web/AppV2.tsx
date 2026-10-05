@@ -6,6 +6,7 @@ import {
   Archive,
   ArrowUpRight,
   Bot,
+  Boxes,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -19,6 +20,7 @@ import {
   FileCode2,
   FilePlus2,
   Folder,
+  FolderGit2,
   FolderOpen,
   FolderPlus,
   Gauge,
@@ -61,6 +63,8 @@ import { ChibiSwarmPanel } from './components/ChibiSwarmPanel';
 import { ConfettiCanvas } from './components/ConfettiCanvas';
 import { LiveWebPreview } from './components/LiveWebPreview';
 import { TemplateShowcaseModal } from './components/TemplateShowcaseModal';
+import { OrchestratorView } from './components/OrchestratorView';
+import { WorktreeWorkspace } from './components/WorktreeWorkspace';
 import {
   playChime,
   isSoundEnabled,
@@ -1253,6 +1257,9 @@ export default function AppV2() {
   });
   const [webPreviewOpen, setWebPreviewOpen] = useState(() => typeof window !== 'undefined' && window.location.search.includes('modal=preview'));
   const [templateModalOpen, setTemplateModalOpen] = useState(() => typeof window !== 'undefined' && window.location.search.includes('modal=templates'));
+  const [orchestratorOpen, setOrchestratorOpen] = useState(false);
+  const [worktreeMode, setWorktreeMode] = useState(false);
+  const [worktreeNotice, setWorktreeNotice] = useState('');
   const [workspaceError, setWorkspaceError] = useState('');
   const [selectedFile, setSelectedFile] = useState('');
   const [openFiles, setOpenFiles] = useState<string[]>([]);
@@ -2378,6 +2385,7 @@ export default function AppV2() {
     { id: 'toggle-character', label: showYurachiCompanion ? 'Hide Yurachi companion' : 'Show Yurachi companion in right menu', detail: 'Toggle the animated companion docked in the right menu', run: () => { const next = !showYurachiCompanion; setShowYurachiCompanion(next); if (next && !inspectorOpen) setInspectorOpen(true); notify(next ? 'Yurachi companion docked in right menu' : 'Yurachi companion hidden'); } },
     { id: 'open-goal', label: 'Open goal', detail: 'Set the persistent session goal and progress', run: () => { setInspectorTab('goal'); setInspectorOpen(true); } },
     { id: 'open-files', label: 'Open project files', detail: 'Browse files or open the VSCode-style editor', run: () => { setSidebarTab('files'); setSidebarOpen(true); } },
+    { id: 'open-orchestrator', label: 'Open agent orchestrator', detail: 'Run parallel agents in isolated Git worktrees', run: () => setOrchestratorOpen(true) },
     { id: 'open-terminal', label: 'Open terminal', detail: 'Start a local shell or connect through SSH', run: () => { setTerminalPreferredKind('local'); setTerminalOpen(true); } },
     { id: 'open-context', label: 'Show context window', detail: 'View estimated tokens and model window', run: () => { setInspectorTab('context'); setInspectorOpen(true); } },
     { id: 'open-project', label: 'Open project', detail: 'Choose another local workspace', run: () => void chooseWorkspace() },
@@ -2471,7 +2479,27 @@ export default function AppV2() {
     : statusLabel(status, connected);
 
   return (
-    <div className="alisa-shell flex h-full min-h-0 flex-col overflow-hidden bg-[#0b0d12] text-slate-200">
+    <div className="alisa-shell relative flex h-full min-h-0 flex-col overflow-hidden bg-[#0b0d12] text-slate-200">
+      {worktreeMode ? (
+        <WorktreeWorkspace
+          yoloMode={yoloMode}
+          yoloSaving={yoloSaving}
+          onToggleYolo={() => void toggleYolo()}
+          onClose={() => setWorktreeMode(false)}
+          onNotice={message => { setWorktreeNotice(message); setTimeout(() => setWorktreeNotice(''), 4000); }}
+        />
+      ) : orchestratorOpen ? (
+        <OrchestratorView
+          sessionId={sessionId}
+          model={model}
+          onClose={() => setOrchestratorOpen(false)}
+        />
+      ) : null}
+      {worktreeNotice && worktreeMode && (
+        <div className="pointer-events-none fixed bottom-10 left-1/2 z-50 -translate-x-1/2 rounded-xl border border-white/10 bg-[#171b25]/95 px-4 py-2 text-[11px] text-slate-200 shadow-2xl">
+          {worktreeNotice}
+        </div>
+      )}
       <header className="alisa-topbar relative z-20 flex h-14 shrink-0 items-center justify-between border-b border-white/[0.08] px-3 md:px-5">
         <div className="flex min-w-0 items-center gap-2">
           <IconButton label="Toggle chats panel" onClick={() => setSidebarOpen(value => !value)}><PanelLeft className="h-4 w-4" /></IconButton>
@@ -2600,6 +2628,8 @@ export default function AppV2() {
           </IconButton>
           <IconButton label="Open integrated terminal · Ctrl/Cmd + `" active={terminalOpen} onClick={() => setTerminalOpen(value => !value)}><Terminal className="h-4 w-4" /></IconButton>
           <IconButton label="Open project files" onClick={() => { setSidebarOpen(true); setSidebarTab('files'); }}><FolderOpen className="h-4 w-4" /></IconButton>
+          <IconButton label="Open the agent orchestrator · parallel worktrees" active={orchestratorOpen} onClick={() => setOrchestratorOpen(true)}><Boxes className="h-4 w-4" /></IconButton>
+          <IconButton label="Worktree workspace · projects, agent tabs, terminal" active={worktreeMode} onClick={() => setWorktreeMode(value => !value)}><FolderGit2 className="h-4 w-4" /></IconButton>
           <IconButton label="Provider and workspace settings" onClick={() => openSettings()}><Settings2 className="h-4 w-4" /></IconButton>
           <IconButton label="Toggle inspector" onClick={() => setInspectorOpen(value => !value)}><PanelRight className="h-4 w-4" /></IconButton>
           {!connected ? <WifiOff className="ml-1 h-4 w-4 text-rose-300" /> : <Wifi className="ml-1 h-4 w-4 text-emerald-300" />}
