@@ -80,6 +80,8 @@ export interface Message {
     supervisor?: boolean;
     supervisorRound?: number;
     directiveType?: 'continuation' | 'steering';
+    /** Set on messages produced by an external CLI agent run. */
+    cliAgent?: string;
   };
 }
 

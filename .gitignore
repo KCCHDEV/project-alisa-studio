@@ -48,3 +48,12 @@ src-tauri/binaries/*
 
 
 .alisa-schedules.json*
+.alisa-worktrees.json*
+.alisa-annotations.json*
+
+# Per-agent CLI configs created by local coding tools
+opencode.json
+
+# Orchestrator worktrees live outside the repo, but keep the path ignored in
+# case a custom worktree root is ever pointed inside it
+.alisa-worktrees/

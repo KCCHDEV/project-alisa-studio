@@ -19,6 +19,12 @@ import { terminalTool } from '../tools/terminal.ts';
 import { AtomicJsonStore } from './config-store.ts';
 import { TerminalSessionManager, type TerminalTarget } from './terminal-sessions.ts';
 import { detectCapabilities } from '../core/capabilities.ts';
+import { OrchestratorRegistry, type RunStatus } from './orchestrator.ts';
+import { WorktreeRegistry } from './worktrees.ts';
+import { commitWorktree, mergeBranch, runGit, worktreeFileDiffs } from './worktree-git.ts';
+import { CliAgentRunner } from './cli-agent-sessions.ts';
+import { detectCliAgents, requireCliAgent } from '../core/cli-agents.ts';
+import { AnnotationStore, formatAnnotationsForAgent } from './annotations.ts';
 
 const PORT = Number(process.env.PORT || 3101);
 const RUNTIME_DIR = process.env.ALISA_CONFIG_DIR || process.cwd();
@@ -410,21 +416,19 @@ function pickFolderNative(): Promise<string | null> {
 }
 
 const sessions = new SessionStore(ALISA_SESSIONS_DIR);
-const activeWorkspaces = new Set<string>();
 type SessionSavedEvent = { type: 'session_saved'; sessionId: string; status: AgentStatus; detail?: string; durationMs: number; completedAt: number; swarm?: boolean; agents?: SwarmAgent[] };
-type TaskStateEvent = { type: 'task_state'; sessionId: string; status: AgentStatus; detail?: string; model: string; mode: AgentMode; startedAt: number; swarm?: boolean; yolo?: boolean; contextWindow?: number };
+type TaskStateEvent = { type: 'task_state'; sessionId: string; status: AgentStatus; detail?: string; model: string; mode: AgentMode; startedAt: number; swarm?: boolean; yolo?: boolean; contextWindow?: number; runId?: string };
 type TerminalServerEvent =
   | { type: 'terminal_started'; id: string; kind: 'local' | 'ssh'; cwd?: string; host?: string; username?: string; port?: number; startedAt: number }
   | { type: 'terminal_output'; sessionId: string; data: string; stream: 'stdout' | 'stderr' }
   | { type: 'terminal_exit'; sessionId: string; code: number | null; signal: NodeJS.Signals | null; reason?: string }
   | { type: 'terminal_error'; sessionId: string; message: string };
-const activeTaskStates = new Map<string, TaskStateEvent>();
+const activeTaskStates = new Map<string, { workspace: string; state: TaskStateEvent }>();
 const schedules = new ScheduleStore(path.join(RUNTIME_DIR, '.alisa-schedules.json'));
 const scheduler = setInterval(() => {
   schedules.tick(async schedule => {
     const workspace = schedule.workspace;
     if (!fs.existsSync(workspace)) throw new Error('Scheduled workspace no longer exists');
-    activeWorkspaces.add(workspace);
     const session = sessions.create(workspace);
     const agent = new Agent({ cwd: workspace, mode: 'ask', maxIterations: 10, llm: new LLMClient({ ...currentConfig }), onEvent(event) {
       if (event.type === 'message_added') { session.messages.push(event.message); sessions.save(session); }
@@ -433,8 +437,8 @@ const scheduler = setInterval(() => {
       await agent.runTask(schedule.prompt);
       if (agent.getStatus() === 'error') throw new Error(`Scheduled task failed. Review chat ${session.id}`);
       return session.id;
-    } finally { activeWorkspaces.delete(workspace); }
-  }, workspace => activeWorkspaces.has(workspace)).catch(err => console.error('Scheduler failed:', err.message));
+    } finally { /* The scheduled run owns its own lifecycle; nothing to release here. */ }
+  }, workspace => orchestrator.isWorkspaceBusy(workspace)).catch(err => console.error('Scheduler failed:', err.message));
 }, 15000);
 scheduler.unref();
 
@@ -615,7 +619,7 @@ const server = http.createServer(async (req, res) => {
           providerId: z.string().trim().min(1).max(120),
           model: z.string().trim().min(1).max(240).optional(),
         }).parse(JSON.parse(body));
-        if (activeWorkspaces.has(currentConfig.workspaceDir)) throw new Error('Stop the active task before changing the model');
+        if (orchestrator.isWorkspaceBusy(currentConfig.workspaceDir)) throw new Error('Stop the active task before changing the model');
         const { providerId, model } = data;
         const nextConfig = cloneConfig();
         const target = nextConfig.providers.find(p => p.id === providerId);
@@ -735,7 +739,7 @@ const server = http.createServer(async (req, res) => {
       req.on('end', () => {
         try {
           const data = JSON.parse(body);
-          if (activeWorkspaces.size) throw new Error('Stop running tasks before changing settings or workspace');
+          if (orchestrator.activeCount) throw new Error('Stop running tasks before changing settings or workspace');
           const nextConfig = cloneConfig();
           if (data.apiKey !== undefined) {
             if (typeof data.apiKey !== 'string') throw new Error('API key must be text');
@@ -894,10 +898,21 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/api/files/tree' && req.method === 'GET') {
-    const rootDir = currentConfig.workspaceDir;
-    const tree = getFileTree(rootDir, rootDir);
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ files: tree, workspaceDir: rootDir }));
+    try {
+      // A worktree id switches the tree (and its git badges) to that checkout,
+      // which is what the explorer panel shows for the active agent tab.
+      const worktreeId = url.searchParams.get('worktreeId');
+      const rootDir = worktreeId
+        ? (await worktrees.resolvePath(currentConfig.workspaceDir, worktreeId)).meta.path
+        : currentConfig.workspaceDir;
+      const tree = getFileTree(rootDir, rootDir);
+      const statuses = worktreeId ? await gitStatusMap(rootDir) : new Map<string, string>();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ files: tree, workspaceDir: rootDir, statuses: Object.fromEntries(statuses) }));
+    } catch (err: any) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message || 'Unable to read the file tree' }));
+    }
     return;
   }
 
@@ -1065,6 +1080,202 @@ const server = http.createServer(async (req, res) => {
     } catch (err: any) { res.writeHead(400); res.end(JSON.stringify({ error: err.message })); }
     return;
   }
+  if (url.pathname === '/api/worktrees/annotations' && req.method === 'GET') {
+    try {
+      const id = url.searchParams.get('id');
+      if (!id) throw new Error('Worktree id is required');
+      // Prove the id maps to a real worktree before exposing its notes.
+      await worktrees.resolvePath(currentConfig.workspaceDir, id);
+      const annotations = annotationsStore.list(id);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ worktreeId: id, annotations, prompt: formatAnnotationsForAgent(annotations.filter(entry => !entry.resolved)) }));
+    } catch (err: any) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message || 'Unable to read annotations' }));
+    }
+    return;
+  }
+  if (url.pathname === '/api/worktrees/annotate' && req.method === 'POST') {
+    try {
+      let body = '';
+      for await (const chunk of req) { body += chunk; if (body.length > 32000) throw new Error('Annotation request is too large'); }
+      const parsed = z.object({
+        action: z.enum(['add', 'update', 'delete']).default('add'),
+        id: z.string().trim().min(1).max(120).optional(),
+        worktreeId: z.string().trim().min(1).max(120).optional(),
+        filePath: z.string().trim().min(1).max(512).optional(),
+        line: z.number().int().min(1).max(1000000).optional(),
+        side: z.enum(['new', 'old']).optional(),
+        comment: z.string().trim().min(1).max(4000).optional(),
+        resolved: z.boolean().optional(),
+      }).parse(JSON.parse(body));
+
+      if (parsed.action === 'add') {
+        if (!parsed.worktreeId || !parsed.filePath || parsed.line === undefined || !parsed.comment) {
+          throw new Error('worktreeId, filePath, line and comment are required');
+        }
+        await worktrees.resolvePath(currentConfig.workspaceDir, parsed.worktreeId);
+        const annotation = annotationsStore.add({
+          worktreeId: parsed.worktreeId,
+          filePath: parsed.filePath,
+          line: parsed.line,
+          side: parsed.side,
+          comment: parsed.comment,
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(annotation));
+        return;
+      }
+
+      if (!parsed.id) throw new Error('Annotation id is required');
+      const existing = annotationsStore.get(parsed.id);
+      if (!existing) throw new Error('Unknown annotation');
+      await worktrees.resolvePath(currentConfig.workspaceDir, existing.worktreeId);
+
+      if (parsed.action === 'delete') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ deleted: annotationsStore.remove(parsed.id) }));
+        return;
+      }
+
+      const updated = annotationsStore.update(parsed.id, {
+        comment: parsed.comment,
+        resolved: parsed.resolved,
+        line: parsed.line,
+      });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(updated));
+    } catch (err: any) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message || 'Unable to update annotation' }));
+    }
+    return;
+  }
+  if (url.pathname === '/api/cli-agents' && req.method === 'GET') {
+    try {
+      const includeVersions = url.searchParams.get('versions') !== '0';
+      // `--help` is probed only when asked for, so opening the picker stays fast.
+      const verifyYolo = url.searchParams.get('verifyYolo') !== '0';
+      const agents = await detectCliAgents({ cwd: currentConfig.workspaceDir, includeVersions, verifyYolo });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ agents, running: cliRunner.activeCount, yoloMode: currentConfig.yoloMode === true }));
+    } catch (err: any) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message || 'Unable to detect CLI agents' }));
+    }
+    return;
+  }
+  if (url.pathname === '/api/worktrees' && req.method === 'GET') {
+    try {
+      const info = await worktrees.repoInfo(currentConfig.workspaceDir);
+      const records = info.repoRoot ? await worktrees.list(currentConfig.workspaceDir) : [];
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        ...info,
+        worktrees: records,
+        runs: orchestrator.active(),
+        capacity: orchestrator.capacity,
+      }));
+    } catch (err: any) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message || 'Unable to list worktrees' }));
+    }
+    return;
+  }
+  if (url.pathname === '/api/worktrees' && req.method === 'POST') {
+    try {
+      let body = '';
+      for await (const chunk of req) { body += chunk; if (body.length > 128000) throw new Error('Worktree request is too large'); }
+      const data = z.object({
+        title: z.string().trim().min(1).max(200),
+        prompt: z.string().max(20000).optional(),
+        baseRef: z.string().trim().min(1).max(300).optional(),
+        engine: z.enum(['alisa', 'cli']).optional(),
+        cliAgentId: z.string().trim().min(1).max(80).optional(),
+        sessionId: z.string().trim().min(1).max(120).optional(),
+      }).parse(JSON.parse(body));
+      const record = await worktrees.create({ workspace: currentConfig.workspaceDir, ...data });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(record));
+    } catch (err: any) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message || 'Unable to create worktree' }));
+    }
+    return;
+  }
+  if (url.pathname === '/api/worktrees/diff' && req.method === 'GET') {
+    try {
+      const id = url.searchParams.get('id');
+      if (!id) throw new Error('Worktree id is required');
+      const { meta } = await worktrees.resolvePath(currentConfig.workspaceDir, id);
+      const paths = url.searchParams.getAll('path').filter(Boolean).slice(0, 200);
+      const files = await worktreeFileDiffs({ worktreePath: meta.path, baseRef: meta.baseRef, paths: paths.length ? paths : undefined });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ worktreeId: meta.id, baseRef: meta.baseRef, files }));
+    } catch (err: any) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message || 'Unable to read worktree diff' }));
+    }
+    return;
+  }
+  if (url.pathname === '/api/worktrees/commit' && req.method === 'POST') {
+    try {
+      let body = '';
+      for await (const chunk of req) { body += chunk; if (body.length > 64000) throw new Error('Commit request is too large'); }
+      const data = z.object({
+        id: z.string().trim().min(1).max(120),
+        message: z.string().trim().min(1).max(4000),
+        paths: z.array(z.string().trim().min(1).max(512)).max(500).optional(),
+      }).parse(JSON.parse(body));
+      const { meta } = await worktrees.resolvePath(currentConfig.workspaceDir, data.id);
+      const result = await commitWorktree({ worktreePath: meta.path, message: data.message, paths: data.paths });
+      await worktrees.update(meta.id, {});
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, ...result }));
+    } catch (err: any) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message || 'Unable to commit worktree changes' }));
+    }
+    return;
+  }
+  if (url.pathname === '/api/worktrees/merge' && req.method === 'POST') {
+    try {
+      let body = '';
+      for await (const chunk of req) { body += chunk; if (body.length > 32000) throw new Error('Merge request is too large'); }
+      const data = z.object({
+        id: z.string().trim().min(1).max(120),
+        message: z.string().trim().max(4000).optional(),
+      }).parse(JSON.parse(body));
+      const { meta } = await worktrees.resolvePath(currentConfig.workspaceDir, data.id);
+      const info = await worktrees.repoInfo(currentConfig.workspaceDir);
+      if (!info.repoRoot) throw new Error('Git worktrees are not available for this workspace');
+      const result = await mergeBranch({ repoRoot: info.repoRoot, mainWorktreePath: info.repoRoot, branch: meta.branch, message: data.message });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ...result, worktreeId: meta.id, branch: meta.branch }));
+    } catch (err: any) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message || 'Unable to merge worktree' }));
+    }
+    return;
+  }
+  if (url.pathname === '/api/worktrees/remove' && req.method === 'POST') {
+    try {
+      let body = '';
+      for await (const chunk of req) { body += chunk; if (body.length > 32000) throw new Error('Remove request is too large'); }
+      const data = z.object({
+        id: z.string().trim().min(1).max(120),
+        deleteBranch: z.boolean().optional(),
+      }).parse(JSON.parse(body));
+      const result = await worktrees.remove({ workspace: currentConfig.workspaceDir, id: data.id, deleteBranch: data.deleteBranch === true });
+      annotationsStore.clear(data.id);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(result));
+    } catch (err: any) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message || 'Unable to remove worktree' }));
+    }
+    return;
+  }
   if (url.pathname === '/api/goals' && req.method === 'POST') {
     try {
       let body = '';
@@ -1155,7 +1366,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (url.pathname === '/api/sessions' && req.method === 'POST') {
-    if (activeWorkspaces.has(currentConfig.workspaceDir)) { res.writeHead(409); res.end(JSON.stringify({ error: 'Stop the active task before creating a chat' })); return; }
+    if (orchestrator.isWorkspaceBusy(currentConfig.workspaceDir)) { res.writeHead(409); res.end(JSON.stringify({ error: 'Stop the active task before creating a chat' })); return; }
     try {
       let body = '';
       for await (const chunk of req) { body += chunk; if (body.length > 16000) throw new Error('Session request is too large'); }
@@ -1171,7 +1382,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname === '/api/rollback' && req.method === 'POST') {
     try {
-      if (activeWorkspaces.size) throw new Error('Stop active tasks before rollback');
+      if (orchestrator.activeCount) throw new Error('Stop active tasks before rollback');
       const tx = getTxManager(currentConfig.workspaceDir);
       const rollbackResult = await tx.rollbackLatest();
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1234,6 +1445,36 @@ const server = http.createServer(async (req, res) => {
   res.end(JSON.stringify({ error: 'Not found' }));
 });
 
+/**
+ * Per-file git status for the explorer badges.
+ *
+ * Read through one porcelain call so the whole tree costs a single git process,
+ * and every entry is validated as a repo-relative path before it is returned.
+ */
+async function gitStatusMap(cwd: string): Promise<Map<string, string>> {
+  const statuses = new Map<string, string>();
+  if (!fs.existsSync(cwd)) return statuses;
+  try {
+    const { stdout } = await runGit(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+    const tokens = stdout.split('\0').filter(token => token.length > 0);
+    for (let index = 0; index < tokens.length;) {
+      const code = tokens[index];
+      index += 1;
+      if (code.length < 2) continue;
+      const isPair = code[0] === 'R' || code[0] === 'C';
+      const filePath = isPair ? tokens[index + 1] : tokens[index];
+      index += isPair ? 2 : 1;
+      if (!filePath) continue;
+      const normalized = filePath.split(path.sep).join('/');
+      if (path.isAbsolute(filePath) || normalized.split('/').includes('..')) continue;
+      statuses.set(normalized, `${code[0]}${code[1]}`);
+    }
+  } catch {
+    // A non-git directory simply has no badges.
+  }
+  return statuses;
+}
+
 function getFileTree(dir: string, base: string, depth = 0): any[] {
   if (depth > 4) return [];
   const IGNORED = new Set([
@@ -1293,6 +1534,422 @@ function activeWorkspace(requested?: string): string {
   throw new Error('Session workspace must match the active project');
 }
 
+// Agent orchestration ---------------------------------------------------------
+//
+// Task lifecycle lives in `OrchestratorRegistry` instead of a WebSocket closure
+// so several agents can run at once (one per worktree) and keep running when
+// the UI reconnects. The socket is only a subscriber.
+
+const orchestrator = new OrchestratorRegistry({
+  maxParallel: Math.max(1, Number(process.env.ALISA_MAX_PARALLEL_AGENTS || 4) || 4),
+});
+
+/** Git worktrees owned by the orchestrator, one per parallel agent. */
+const worktrees = new WorktreeRegistry({ runtimeDir: RUNTIME_DIR });
+
+/** Reviewer comments pinned to diff lines. */
+const annotationsStore = new AnnotationStore(RUNTIME_DIR);
+
+/** Pending approval prompts, shared by every run so a reply can arrive on any socket. */
+const approvalResolvers = new Map<string, (approved: boolean) => void>();
+
+function latestTaskStateForWorkspace(workspace: string): TaskStateEvent | undefined {
+  let latest: TaskStateEvent | undefined;
+  for (const entry of activeTaskStates.values()) {
+    if (entry.workspace !== workspace) continue;
+    if (!latest || entry.state.startedAt >= latest.startedAt) latest = entry.state;
+  }
+  return latest;
+}
+
+function mapAgentStatusToRunStatus(status: AgentStatus): RunStatus {
+  if (status === 'done') return 'done';
+  if (status === 'idle') return 'cancelled';
+  if (status === 'error') return 'error';
+  // Anything else means the run ended without a terminal agent status.
+  return 'error';
+}
+
+type TaskBroadcast = (event: AgentEvent | SessionSavedEvent | TaskStateEvent | Record<string, any>) => void;
+
+function createApprovalRequester(broadcast: TaskBroadcast, runId?: string) {
+  return (action: string, details: Record<string, unknown>, signal: AbortSignal) => new Promise<boolean>(resolve => {
+    const resolveId = crypto.randomUUID();
+    const finish = (approved: boolean) => { approvalResolvers.delete(resolveId); signal.removeEventListener('abort', cancel); clearTimeout(timer); resolve(approved); };
+    const cancel = () => finish(false);
+    const timer = setTimeout(cancel, 5 * 60 * 1000);
+    approvalResolvers.set(resolveId, finish);
+    signal.addEventListener('abort', cancel, { once: true });
+    if (signal.aborted) { cancel(); return; }
+    broadcast({ type: 'approval_requested', action, details, resolveId, runId });
+  });
+}
+
+export interface SessionTaskParams {
+  runId: string;
+  signal: AbortSignal;
+  workspace: string;
+  /** Working directory for the agent: a worktree path, or the workspace itself. */
+  cwd: string;
+  sessionId: string;
+  prompt: string;
+  mode: AgentMode;
+  model: string;
+  swarm: boolean;
+  skills: string[];
+  maxSupervisorRounds?: number;
+  broadcast: TaskBroadcast;
+}
+
+/**
+ * Run one Alisa agent (or staged swarm) to completion inside `cwd`.
+ *
+ * The behaviour mirrors the original single-socket implementation: the session
+ * is updated as events arrive, a supervisor can send continuation directives,
+ * and a `session_saved` event is always emitted with the final status.
+ */
+async function executeSessionTask(params: SessionTaskParams): Promise<{ status: RunStatus; detail: string }> {
+  const { workspace, cwd, sessionId, prompt, mode, model, swarm, skills, broadcast, signal } = params;
+  const session = sessions.get(workspace, sessionId);
+  const useYolo = currentConfig.yoloMode === true;
+  const contextWindow = contextWindowForModel(currentConfig.activeProviderId, model);
+  const effectiveRetries = typeof currentConfig.maxRetries === 'number'
+    ? currentConfig.maxRetries
+    : (isTestEnv ? 1 : 100);
+  const maxSupervisorRounds = params.maxSupervisorRounds ?? (isTestEnv ? 0 : 5);
+  const startedAt = Date.now();
+
+  session.mode = mode;
+  session.model = model;
+  session.swarm = swarm;
+  sessions.save(session);
+
+  const taskState: TaskStateEvent = {
+    type: 'task_state',
+    sessionId: session.id,
+    status: 'thinking',
+    detail: swarm ? 'Starting agent swarm' : 'Starting task',
+    model,
+    mode,
+    startedAt,
+    swarm,
+    yolo: useYolo,
+    contextWindow,
+    runId: params.runId,
+  };
+  activeTaskStates.set(params.runId, { workspace, state: taskState });
+  broadcast(taskState);
+
+  let agent: Agent | undefined;
+  let swarmRunner: SwarmRunner | undefined;
+  const activeAgents: Agent[] = [];
+  const requestApproval = createApprovalRequester(broadcast, params.runId);
+
+  const handleAgentEvent = (event: AgentEvent) => {
+    if (event.type === 'status_change') {
+      const overallStatus = swarm && (event.status === 'done' || event.status === 'idle') ? 'acting' : event.status;
+      const prefix = event.agentRole ? `${event.agentRole}: ` : '';
+      taskState.status = overallStatus;
+      taskState.detail = prefix + (event.detail || event.status);
+      activeTaskStates.set(params.runId, { workspace, state: taskState });
+    }
+    if (event.type === 'message_added') {
+      const internalSwarmPrompt = swarm && Boolean(event.agentRole) && event.message.role === 'user';
+      if (!internalSwarmPrompt) {
+        session.messages.push(event.message);
+        sessions.save(session);
+      } else {
+        return;
+      }
+    }
+    if (event.type === 'plan_update') {
+      session.plan = event.items;
+      sessions.save(session);
+    }
+    if (event.type === 'goal_update') {
+      session.goal = event.goal;
+      sessions.save(session);
+    }
+    broadcast(event);
+  };
+
+  try {
+    try {
+      const userMessage = {
+        id: `msg_user_${Date.now()}`,
+        role: 'user' as const,
+        content: prompt,
+        timestamp: Date.now(),
+      };
+      session.messages.push(userMessage);
+      sessions.save(session);
+      broadcast({ type: 'message_added', message: userMessage });
+
+      const supervisor = new TaskSupervisor({ llmConfig: { ...currentConfig, model } });
+      let supervisorRound = 0;
+      let currentPrompt = prompt;
+
+      while (true) {
+        if (swarm) {
+          swarmRunner = new SwarmRunner({
+            cwd,
+            sessionId: session.id,
+            prompt: currentPrompt,
+            history: [...session.messages],
+            skillNames: skills,
+            llmConfig: { ...currentConfig, model, maxRetries: effectiveRetries },
+            contextWindow,
+            autoApprove: useYolo,
+            maxRetries: effectiveRetries,
+            goal: session.goal,
+            requestApproval,
+            onEvent: handleAgentEvent,
+            onGoalUpdate: goal => { session.goal = goal; sessions.save(session); },
+            onAgentCreated: worker => activeAgents.push(worker),
+          });
+          const result = await swarmRunner.run();
+          taskState.status = result.status;
+          taskState.detail = result.detail;
+          activeTaskStates.set(params.runId, { workspace, state: taskState });
+        } else {
+          agent = new Agent({
+            cwd,
+            sessionId: session.id,
+            mode,
+            goal: session.goal,
+            contextWindow,
+            autoApprove: useYolo,
+            maxRetries: effectiveRetries,
+            requestApproval,
+            llm: new LLMClient({ ...currentConfig, model, maxRetries: effectiveRetries }),
+            onEvent: handleAgentEvent,
+          });
+          activeAgents.push(agent);
+          await agent.runTask(currentPrompt, [...session.messages], skills);
+        }
+
+        const isCancelled = agent?.getStatus() === 'idle' || taskState.status === 'idle' || signal.aborted;
+        if (isCancelled || supervisorRound >= maxSupervisorRounds) break;
+
+        // Supervisor completion check ("ไล่เช็คงานยังไม่เสร็จก็สั่งงานต่อให้ไปอัตโนมัติ")
+        const assessment = await supervisor.assessCompletion(prompt, session.messages, session.goal);
+        if (assessment.needsContinuation && assessment.nextDirective) {
+          supervisorRound += 1;
+          const directive = assessment.nextDirective;
+          const supervisorMessage = {
+            id: `msg_supervisor_${Date.now()}`,
+            role: 'user' as const,
+            content: directive,
+            timestamp: Date.now(),
+            metadata: { supervisor: true, supervisorRound, directiveType: 'continuation' as const },
+          };
+          session.messages.push(supervisorMessage);
+          sessions.save(session);
+          broadcast({ type: 'message_added', message: supervisorMessage });
+          broadcast({ type: 'supervisor_intervention', directive, reason: 'incomplete' });
+          broadcast({
+            type: 'status_change',
+            status: 'self_correcting',
+            detail: `👑 Supervisor สั่งงานต่ออัตโนมัติ (รอบที่ ${supervisorRound}/${maxSupervisorRounds}): ${assessment.reason}`,
+          });
+          currentPrompt = directive;
+          activeAgents.length = 0;
+          swarmRunner = undefined;
+          agent = undefined;
+          continue;
+        }
+
+        break;
+      }
+    } finally {
+      const finalStatus = swarmRunner
+        ? (taskState.status || 'done')
+        : (agent?.getStatus() || (taskState.status ?? 'error'));
+      const finalDetail = taskState.detail || (finalStatus === 'done' ? 'Completed' : finalStatus === 'idle' ? 'Cancelled' : 'Task completed');
+      const durationMs = Math.max(0, Date.now() - startedAt);
+      const completedAt = Date.now();
+      const lastRun: SavedRun = { status: finalStatus, detail: finalDetail, durationMs, completedAt };
+      session.lastRun = lastRun;
+      sessions.save(session);
+      const completedSwarm = Boolean(swarmRunner);
+      const completedAgents = swarmRunner?.getAgents();
+      activeTaskStates.delete(params.runId);
+      broadcast({
+        type: 'session_saved',
+        sessionId: session.id,
+        status: finalStatus,
+        detail: finalDetail,
+        durationMs,
+        completedAt,
+        swarm: completedSwarm,
+        agents: completedAgents,
+      });
+      runOutcomes.set(params.runId, { status: mapAgentStatusToRunStatus(finalStatus), detail: finalDetail });
+    }
+
+    const outcome = runOutcomes.get(params.runId) ?? { status: 'error' as RunStatus, detail: 'Task ended without a status' };
+    return outcome;
+  } catch (err: any) {
+    const message = err?.message || 'Task failed';
+    broadcast({ type: 'error', message });
+    broadcast({ type: 'status_change', status: agent?.getStatus() || 'error', detail: message });
+    return { status: agent?.getStatus() === 'done' ? 'done' : 'error', detail: message };
+  } finally {
+    runOutcomes.delete(params.runId);
+    for (const worker of activeAgents) worker.abort();
+  }
+}
+
+/** Final status recorded by the inner `finally`, read by the outer return. */
+const runOutcomes = new Map<string, { status: RunStatus; detail: string }>();
+
+const cliRunner = new CliAgentRunner();
+
+export interface CliTaskParams {
+  runId: string;
+  signal: AbortSignal;
+  workspace: string;
+  cwd: string;
+  sessionId: string;
+  prompt: string;
+  agentId: string;
+  model?: string;
+  broadcast: TaskBroadcast;
+}
+
+/**
+ * Run an external CLI agent (OpenCode, Claude Code, Codex, ...) as a child
+ * process inside `cwd`.
+ *
+ * The transcript is persisted into the same session as the built-in engine so
+ * both kinds of work are reviewable in one place, and each chunk is forwarded
+ * live so the dashboard tile streams output.
+ */
+async function executeCliTask(params: CliTaskParams): Promise<{ status: RunStatus; detail: string }> {
+  const { workspace, cwd, sessionId, prompt, agentId, model, broadcast, signal } = params;
+  const definition = requireCliAgent(agentId);
+  const session = sessions.get(workspace, sessionId);
+  const useYolo = currentConfig.yoloMode === true;
+  const startedAt = Date.now();
+
+  const taskState: TaskStateEvent = {
+    type: 'task_state',
+    sessionId: session.id,
+    status: 'thinking',
+    detail: `Starting ${definition.label}`,
+    model: model || definition.label,
+    mode: 'code',
+    startedAt,
+    yolo: useYolo,
+    runId: params.runId,
+  };
+  activeTaskStates.set(params.runId, { workspace, state: taskState });
+  broadcast(taskState);
+
+  const userMessage = {
+    id: `msg_user_${Date.now()}`,
+    role: 'user' as const,
+    content: prompt,
+    timestamp: Date.now(),
+    metadata: { cliAgent: definition.id },
+  };
+  session.messages.push(userMessage);
+  sessions.save(session);
+  broadcast({ type: 'message_added', message: userMessage });
+
+  let stdoutBuffer = '';
+  let stderrBuffer = '';
+  let flushTimer: ReturnType<typeof setTimeout> | undefined;
+  const flush = (immediate = false) => {
+    if (flushTimer) { clearTimeout(flushTimer); flushTimer = undefined; }
+    const emit = () => {
+      if (stdoutBuffer) {
+        broadcast({ type: 'cli_agent_output', runId: params.runId, worktreeId: undefined, stream: 'stdout', data: stdoutBuffer });
+        stdoutBuffer = '';
+      }
+      if (stderrBuffer) {
+        broadcast({ type: 'cli_agent_output', runId: params.runId, stream: 'stderr', data: stderrBuffer });
+        stderrBuffer = '';
+      }
+    };
+    if (immediate) { emit(); return; }
+    // Batch chunks so a fast CLI cannot flood the socket frame by frame.
+    flushTimer = setTimeout(emit, 60);
+    flushTimer.unref?.();
+  };
+
+  try {
+    const result = await cliRunner.run({
+      agentId,
+      cwd,
+      prompt,
+      model,
+      yolo: useYolo,
+      signal,
+      callbacks: {
+        onOutput: (chunk, stream) => {
+          if (stream === 'stdout') stdoutBuffer += chunk;
+          else stderrBuffer += chunk;
+          flush();
+          if (signal.aborted) return;
+          taskState.status = 'acting';
+          taskState.detail = `${definition.label} is working`;
+          activeTaskStates.set(params.runId, { workspace, state: taskState });
+        },
+      },
+    });
+    flush(true);
+
+    const transcript = result.transcript.trim();
+    const finalStatus: AgentStatus = result.exitCode === 0 ? 'done' : 'error';
+    const detail = signal.aborted
+      ? 'Cancelled'
+      : result.exitCode === 0
+        ? (truncatedLabel(result.truncated, `${definition.label} finished${useYolo ? ' (YOLO)' : ''}`))
+        : `${definition.label} exited with code ${result.exitCode ?? 'unknown'}`;
+
+    session.messages.push({
+      id: `msg_cli_${Date.now()}`,
+      role: 'assistant',
+      content: transcript || detail,
+      timestamp: Date.now(),
+      metadata: { model: definition.label, cliAgent: definition.id, error: finalStatus === 'error' },
+    });
+    sessions.save(session);
+    broadcast({ type: 'message_added', message: session.messages.at(-1)! });
+
+    taskState.status = finalStatus;
+    taskState.detail = detail;
+    activeTaskStates.delete(params.runId);
+    const durationMs = Math.max(0, Date.now() - startedAt);
+    const completedAt = Date.now();
+    session.lastRun = { status: finalStatus, detail, durationMs, completedAt };
+    sessions.save(session);
+    broadcast({ type: 'session_saved', sessionId: session.id, status: finalStatus, detail, durationMs, completedAt });
+
+    return { status: mapAgentStatusToRunStatus(finalStatus), detail };
+  } catch (err: any) {
+    flush(true);
+    const message = err?.message || 'CLI agent failed';
+    broadcast({ type: 'error', message });
+    broadcast({ type: 'status_change', status: 'error', detail: message });
+    session.messages.push({
+      id: `msg_cli_${Date.now()}`,
+      role: 'assistant',
+      content: message,
+      timestamp: Date.now(),
+      metadata: { model: definition.label, error: true },
+    });
+    sessions.save(session);
+    activeTaskStates.delete(params.runId);
+    return { status: signal.aborted ? 'cancelled' : 'error', detail: message };
+  }
+}
+
+function truncatedLabel(truncated: boolean, fallback: string): string {
+  return truncated ? `${fallback} (output truncated)` : fallback;
+}
+
 // WebSocket Server
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 1024 * 1024, verifyClient: ({ origin, req }: { origin: string; req: http.IncomingMessage }) => (!origin || trustedOrigins.has(origin)) && trustedHost(req.headers.host) });
 
@@ -1305,21 +1962,32 @@ wss.on('error', (err: any) => {
 });
 
 wss.on('connection', (ws: WebSocket) => {
-  let agent: Agent | undefined;
-  let swarmRunner: SwarmRunner | undefined;
-  let activeAgents: Agent[] = [];
-  let running = false;
-  const approvals = new Map<string, (approved: boolean) => void>();
+  let activeRunId: string | undefined;
   const terminalSessions = new TerminalSessionManager();
-  const broadcast = (event: AgentEvent | SessionSavedEvent | TaskStateEvent | TerminalServerEvent) => {
-    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(event));
+  /**
+   * Events are tagged with the run that produced them so the worktree workspace can
+   * route each agent's stream to its own tab. Events without a run (terminal,
+   * approvals, errors) pass through untouched.
+   */
+  const broadcast = (event: AgentEvent | SessionSavedEvent | TaskStateEvent | TerminalServerEvent | Record<string, any>) => {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    const payload = (activeRunId && typeof event === 'object' && event !== null && !('runId' in event))
+      ? { ...event, runId: activeRunId }
+      : event;
+    ws.send(JSON.stringify(payload));
   };
+  // Runs outlive the socket, so every connected view sees orchestrator activity.
+  const detachOrchestrator = orchestrator.attach(event => broadcast(event as Record<string, any>));
   ws.on('message', async (data) => {
     let msg: any;
     try {
       msg = JSON.parse(data.toString());
-      if (msg.type === 'approval_response') { approvals.get(msg.resolveId)?.(msg.approved === true); return; }
-      if (msg.type === 'abort_task') { swarmRunner?.abort(); agent?.abort(); for (const worker of activeAgents) worker.abort(); return; }
+      if (msg.type === 'approval_response') { approvalResolvers.get(msg.resolveId)?.(msg.approved === true); return; }
+      if (msg.type === 'abort_task') {
+        if (activeRunId) orchestrator.abort(activeRunId, 'Stopped by user');
+        else orchestrator.abortAll('Stopped by user');
+        return;
+      }
       if (msg.type === 'terminal_start') {
         let target: TerminalTarget;
         if (msg.target === 'ssh') {
@@ -1333,14 +2001,24 @@ wss.on('connection', (ws: WebSocket) => {
           const remoteCwd = typeof msg.remoteCwd === 'string' && msg.remoteCwd.trim() ? msg.remoteCwd.trim() : undefined;
           target = { kind: 'ssh', host, username, port: Number(msg.port ?? 22), identityFile, remoteCwd };
         } else {
-          const requestedWorkdir = typeof msg.workdir === 'string' && msg.workdir.trim() ? msg.workdir.trim() : currentConfig.workspaceDir;
-          const candidate = path.isAbsolute(requestedWorkdir)
-            ? path.resolve(requestedWorkdir)
-            : path.resolve(currentConfig.workspaceDir, requestedWorkdir);
-          if (!isPathInsideWorkspace(candidate, currentConfig.workspaceDir)) throw new Error('Local terminal directory must stay inside the active workspace');
-          const workdir = resolveWorkspacePath(currentConfig.workspaceDir, candidate);
-          if (!fs.existsSync(workdir) || !fs.statSync(workdir).isDirectory()) throw new Error('Local terminal directory was not found');
-          target = { kind: 'local', cwd: workdir };
+          // A worktree id opens the shell inside that agent's checkout. Worktrees
+          // live outside the active workspace, so the workspace containment rule
+          // is replaced by the registry's own validation.
+          const worktreeId = typeof msg.worktreeId === 'string' ? msg.worktreeId.trim() : '';
+          if (worktreeId) {
+            const resolved = await worktrees.resolvePath(currentConfig.workspaceDir, worktreeId);
+            if (!fs.existsSync(resolved.meta.path)) throw new Error('Worktree directory was not found');
+            target = { kind: 'local', cwd: resolved.meta.path };
+          } else {
+            const requestedWorkdir = typeof msg.workdir === 'string' && msg.workdir.trim() ? msg.workdir.trim() : currentConfig.workspaceDir;
+            const candidate = path.isAbsolute(requestedWorkdir)
+              ? path.resolve(requestedWorkdir)
+              : path.resolve(currentConfig.workspaceDir, requestedWorkdir);
+            if (!isPathInsideWorkspace(candidate, currentConfig.workspaceDir)) throw new Error('Local terminal directory must stay inside the active workspace');
+            const workdir = resolveWorkspacePath(currentConfig.workspaceDir, candidate);
+            if (!fs.existsSync(workdir) || !fs.statSync(workdir).isDirectory()) throw new Error('Local terminal directory was not found');
+            target = { kind: 'local', cwd: workdir };
+          }
         }
         const info = terminalSessions.start(target, {
           onOutput: (sessionId, output, stream) => broadcast({ type: 'terminal_output', sessionId, data: output, stream }),
@@ -1360,211 +2038,94 @@ wss.on('connection', (ws: WebSocket) => {
         terminalSessions.stop(msg.sessionId);
         return;
       }
-      if (msg.type !== 'start_task') return;
-      if (running || activeWorkspaces.has(currentConfig.workspaceDir)) throw new Error('A task is already running in this workspace');
+if (msg.type !== 'start_task') return;
       if (typeof msg.prompt !== 'string' || !msg.prompt.trim()) throw new Error('Prompt is required');
       const workspace = currentConfig.workspaceDir;
       const session = sessions.get(workspace, msg.sessionId);
       const supportedModes = new Set<AgentMode>(['ask', 'plan', 'code', 'auto']);
       const mode: AgentMode = supportedModes.has(msg.mode) ? msg.mode : (session.mode || 'code');
-      const useSwarm = msg.swarm === true;
-      const useYolo = currentConfig.yoloMode === true;
       const requestedModel = typeof msg.model === 'string' && msg.model.trim()
         ? msg.model.trim()
         : currentConfig.model;
       if (!requestedModel || requestedModel.length > 240) throw new Error('Model must be a non-empty identifier');
-      const contextWindow = contextWindowForModel(currentConfig.activeProviderId, requestedModel);
-      running = true;
-      agent = undefined;
-      swarmRunner = undefined;
-      activeAgents = [];
-      activeWorkspaces.add(workspace);
-      session.mode = mode;
-      session.model = requestedModel;
-      session.swarm = useSwarm;
-      sessions.save(session);
-      const startedAt = Date.now();
-      activeTaskStates.set(workspace, { type: 'task_state', sessionId: session.id, status: 'thinking', detail: useSwarm ? 'Starting agent swarm' : 'Starting task', model: requestedModel, mode, startedAt, swarm: useSwarm, yolo: useYolo, contextWindow });
-      broadcast(activeTaskStates.get(workspace)!);
-      const requestApproval = (action: string, details: Record<string, unknown>, signal: AbortSignal) => new Promise<boolean>(resolve => {
-        const resolveId = crypto.randomUUID();
-        const finish = (approved: boolean) => { approvals.delete(resolveId); signal.removeEventListener('abort', cancel); clearTimeout(timer); resolve(approved); };
-        const cancel = () => finish(false);
-        const timer = setTimeout(cancel, 5 * 60 * 1000);
-        approvals.set(resolveId, finish);
-        signal.addEventListener('abort', cancel, { once: true });
-        if (signal.aborted) { cancel(); return; }
-        broadcast({ type: 'approval_requested', action, details, resolveId });
+      const skillNames = Array.isArray(msg.skills) ? msg.skills.filter((value: unknown) => typeof value === 'string') : [];
+      const prompt = msg.prompt.trim();
+
+      // A worktree id routes the run into that isolated checkout. Without one the
+      // run stays on the main workspace and keeps the legacy single-flight rule.
+      let cwd = workspace;
+      let worktreeId: string | undefined;
+      let label = 'Main workspace';
+      if (typeof msg.worktreeId === 'string' && msg.worktreeId.trim()) {
+        const resolved = await worktrees.resolvePath(workspace, msg.worktreeId.trim());
+        cwd = resolved.meta.path;
+        worktreeId = resolved.meta.id;
+        label = resolved.meta.title;
+      }
+
+      const useSwarm = msg.swarm === true;
+      const useCliEngine = msg.engine === 'cli';
+      const { run, finished } = orchestrator.start({
+        workspace,
+        cwd,
+        sessionId: session.id,
+        prompt,
+        model: useCliEngine ? (typeof msg.cliModel === 'string' ? msg.cliModel : '') : requestedModel,
+        mode,
+        engine: useCliEngine ? 'cli' : 'alisa',
+        label,
+        worktreeId,
+        swarm: useSwarm,
+        exclusiveWorkspace: !worktreeId,
+        runner: context => (useCliEngine
+          ? executeCliTask({
+            runId: context.runId,
+            signal: context.signal,
+            workspace,
+            cwd,
+            sessionId: session.id,
+            prompt,
+            agentId: typeof msg.cliAgentId === 'string' ? msg.cliAgentId : '',
+            model: typeof msg.cliModel === 'string' ? msg.cliModel : undefined,
+            broadcast,
+          })
+          : executeSessionTask({
+            runId: context.runId,
+            signal: context.signal,
+            workspace,
+            cwd,
+            sessionId: session.id,
+            prompt,
+            mode,
+            model: requestedModel,
+            swarm: useSwarm,
+            skills: skillNames,
+            maxSupervisorRounds: typeof msg.maxSupervisorRounds === 'number' ? msg.maxSupervisorRounds : undefined,
+            broadcast,
+          })),
       });
-      const handleAgentEvent = (event: AgentEvent) => {
-        if (event.type === 'status_change') {
-          const task = activeTaskStates.get(workspace);
-          if (task) {
-            const overallStatus = useSwarm && (event.status === 'done' || event.status === 'idle') ? 'acting' : event.status;
-            const prefix = event.agentRole ? `${event.agentRole}: ` : '';
-            activeTaskStates.set(workspace, { ...task, status: overallStatus, detail: prefix + (event.detail || event.status) });
-          }
-        }
-        if (event.type === 'message_added') {
-          const internalSwarmPrompt = useSwarm && Boolean(event.agentRole) && event.message.role === 'user';
-          if (!internalSwarmPrompt) {
-            session.messages.push(event.message);
-            sessions.save(session);
-          } else {
-            return;
-          }
-        }
-        if (event.type === 'plan_update') {
-          session.plan = event.items;
-          sessions.save(session);
-        }
-        if (event.type === 'goal_update') {
-          session.goal = event.goal;
-          sessions.save(session);
-        }
-        broadcast(event);
-      };
-      try {
-        const skillNames = Array.isArray(msg.skills) ? msg.skills.filter((s: unknown) => typeof s === 'string') : [];
-        const userMessage = {
-          id: `msg_user_${Date.now()}`,
-          role: 'user' as const,
-          content: msg.prompt.trim(),
-          timestamp: Date.now(),
-        };
-        session.messages.push(userMessage);
-        sessions.save(session);
-        broadcast({ type: 'message_added', message: userMessage });
-
-        const supervisor = new TaskSupervisor({
-          llmConfig: { ...currentConfig, model: requestedModel },
-        });
-
-        let supervisorRound = 0;
-        const maxSupervisorRounds = typeof msg.maxSupervisorRounds === 'number' ? msg.maxSupervisorRounds : (isTestEnv ? 0 : 5);
-        let currentPrompt = msg.prompt.trim();
-
-        while (true) {
-          if (useSwarm) {
-            const effectiveRetries = typeof currentConfig.maxRetries === 'number'
-              ? currentConfig.maxRetries
-              : (isTestEnv ? 1 : 100);
-            swarmRunner = new SwarmRunner({
-              cwd: workspace,
-              sessionId: session.id,
-              prompt: currentPrompt,
-              history: [...session.messages],
-              skillNames,
-              llmConfig: { ...currentConfig, model: requestedModel, maxRetries: effectiveRetries },
-              contextWindow,
-              autoApprove: useYolo,
-              maxRetries: effectiveRetries,
-              goal: session.goal,
-              requestApproval,
-              onEvent: handleAgentEvent,
-              onGoalUpdate: goal => { session.goal = goal; sessions.save(session); },
-              onAgentCreated: worker => activeAgents.push(worker),
-            });
-            const result = await swarmRunner.run();
-            activeTaskStates.set(workspace, { ...activeTaskStates.get(workspace)!, status: result.status, detail: result.detail });
-          } else {
-            const effectiveRetries = typeof currentConfig.maxRetries === 'number'
-              ? currentConfig.maxRetries
-              : (isTestEnv ? 1 : 100);
-            agent = new Agent({
-              cwd: workspace,
-              sessionId: session.id,
-              mode,
-              goal: session.goal,
-              contextWindow,
-              autoApprove: useYolo,
-              maxRetries: effectiveRetries,
-              requestApproval,
-              llm: new LLMClient({ ...currentConfig, model: requestedModel, maxRetries: effectiveRetries }),
-              onEvent: handleAgentEvent,
-            });
-            activeAgents.push(agent);
-            await agent.runTask(currentPrompt, [...session.messages], skillNames);
-          }
-
-          // Check if task was aborted by user
-          const isCancelled = agent?.getStatus() === 'idle' || activeTaskStates.get(workspace)?.status === 'idle';
-          if (isCancelled || supervisorRound >= maxSupervisorRounds) {
-            break;
-          }
-
-          // Supervisor completion check ("ไล่เช็คงานยังไม่เสร็จก็สั่งงานต่อให้ไปอัตโนมัติ")
-          const assessment = await supervisor.assessCompletion(msg.prompt.trim(), session.messages, session.goal);
-          if (assessment.needsContinuation && assessment.nextDirective) {
-            supervisorRound++;
-            const directive = assessment.nextDirective;
-            const supervisorMessage = {
-              id: `msg_supervisor_${Date.now()}`,
-              role: 'user' as const,
-              content: directive,
-              timestamp: Date.now(),
-              metadata: { supervisor: true, supervisorRound, directiveType: 'continuation' as const },
-            };
-            session.messages.push(supervisorMessage);
-            sessions.save(session);
-            broadcast({ type: 'message_added', message: supervisorMessage });
-            broadcast({
-              type: 'supervisor_intervention',
-              directive,
-              reason: 'incomplete',
-            });
-            broadcast({
-              type: 'status_change',
-              status: 'self_correcting',
-              detail: `👑 Supervisor สั่งงานต่ออัตโนมัติ (รอบที่ ${supervisorRound}/${maxSupervisorRounds}): ${assessment.reason}`,
-            });
-            currentPrompt = directive;
-            activeAgents = [];
-            swarmRunner = undefined;
-            agent = undefined;
-            continue;
-          }
-
-          // Task completed!
-          break;
-        }
-      } finally {
-        const taskState = activeTaskStates.get(workspace);
-        const finalStatus = swarmRunner
-          ? (taskState?.status || 'done')
-          : (agent?.getStatus() || (taskState?.status ?? 'error'));
-        const finalDetail = taskState?.detail || (finalStatus === 'done' ? 'Completed' : finalStatus === 'idle' ? 'Cancelled' : 'Task completed');
-        const durationMs = Math.max(0, Date.now() - startedAt);
-        const completedAt = Date.now();
-        const lastRun: SavedRun = { status: finalStatus, detail: finalDetail, durationMs, completedAt };
-        session.lastRun = lastRun;
-        sessions.save(session);
-        const completedSwarm = Boolean(swarmRunner);
-        const completedAgents = swarmRunner?.getAgents();
-        running = false;
-        activeWorkspaces.delete(workspace);
-        activeTaskStates.delete(workspace);
-        swarmRunner = undefined;
-        activeAgents = [];
-        broadcast({ type: 'session_saved', sessionId: session.id, status: finalStatus, detail: finalDetail, durationMs, completedAt, swarm: completedSwarm, agents: completedAgents });
-      }
+      activeRunId = run.id;
+      finished.then(() => {
+        if (activeRunId === run.id) activeRunId = undefined;
+      }, () => {
+        if (activeRunId === run.id) activeRunId = undefined;
+      });
+      return;
     } catch (err: any) {
-      const wasRunning = running;
-      if (running) {
-        running = false;
-        activeWorkspaces.delete(currentConfig.workspaceDir);
-        activeTaskStates.delete(currentConfig.workspaceDir);
-      }
       if (typeof msg?.type === 'string' && msg.type.startsWith('terminal_')) {
         broadcast({ type: 'terminal_error', sessionId: typeof msg.sessionId === 'string' ? msg.sessionId : '', message: err.message || 'Terminal request failed' });
       } else {
         broadcast({ type: 'error', message: err.message || 'Task failed' });
       }
-      if (wasRunning) broadcast({ type: 'status_change', status: agent?.getStatus() || 'error', detail: err.message });
     }
   });
-  ws.on('close', () => { terminalSessions.disposeAll(); swarmRunner?.abort(); agent?.abort(); for (const worker of activeAgents) worker.abort(); });
-  const activeTask = activeTaskStates.get(currentConfig.workspaceDir);
+  ws.on('close', () => {
+    terminalSessions.disposeAll();
+    detachOrchestrator();
+    // Runs deliberately outlive the socket so an agent keeps working when the UI
+    // reloads; the dashboard reattaches to the orchestrator on reconnect.
+  });
+  const activeTask = latestTaskStateForWorkspace(currentConfig.workspaceDir);
   if (activeTask) broadcast(activeTask);
   else broadcast({ type: 'status_change', status: 'idle', detail: 'Backend connected' });
 });
