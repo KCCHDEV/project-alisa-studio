@@ -44,6 +44,8 @@ Repository นี้มีเฉพาะ source code ของแอป ไม�
 | | Feature | รายละเอียด |
 | --- | --- | --- |
 | 🧠 | **Agent Loop** | ทำงานแบบหลายรอบ: วิเคราะห์ → เรียก tool → อ่านผล → ทำงานต่อ |
+| 🧱 | **Agent Orchestrator** | รันหลาย agent พร้อมกันใน **git worktree แยกกัน** พร้อม dashboard, review diff, comment ทีละบรรทัด และ merge ผลที่ชนะกลับ branch หลัก |
+| 🔌 | **External CLI Agents** | สั่ง OpenCode, Claude Code, Codex, Gemini, Amp, Goose, Crush, Qwen หรือ Cursor Agent ในแอปเดียว โดยใช้ subscription ของคุณเอง |
 | 💬 | **Streaming Chat** | แสดงข้อความ, reasoning field ที่ provider ส่งมา, tool activity และ status แบบ realtime |
 | 🧾 | **Model Attribution** | ทุกคำตอบใหม่ระบุ `via <resolved model>` ว่าตอบจาก model/route ใด |
 | 📁 | **Project Workspace** | เลือกโฟลเดอร์โปรเจกต์ แล้วอ่าน/ค้นหา/แก้ไฟล์ภายใน workspace |
@@ -61,6 +63,45 @@ Repository นี้มีเฉพาะ source code ของแอป ไม�
 | 🌸 | **Yurachi Companion Poses** | ภาพ chibi หลายท่าตามสถานะงาน พร้อมซ่อน/แสดงด้วยปุ่ม, `/character` และจำค่าบนเครื่อง |
 | 🖥️ | **Desktop App** | Tauri สำหรับ desktop พร้อม local Bun backend และ workspace isolation |
 | 🎀 | **Cute Developer Identity** | UI โทนมืดสำหรับเขียนโค้ด ผสม pink / blue / violet แบบ Yurachi-inspired |
+
+---
+
+## 🧱 Agent Orchestrator
+
+Alisa มีโหมด **Orchestrator** ที่ทำให้หลาย agent ทำงานพร้อมกันโดยไม่ชนกัน เปิดจากปุ่ม
+🧱 บนแถบบน หรือ Command Palette → *Open agent orchestrator*
+
+```text
+Prompt เดียว
+    ↓
+สร้าง git worktree แยกต่อ 1 task   →  <repo>/../.alisa-worktrees/<repo>/<slug>/
+branch alisa/<slug>
+    ↓
+รัน agent พร้อมกัน N ตัว (สูงสุด 4 โดยปรับด้วย ALISA_MAX_PARALLEL_AGENTS)
+   ├── engine: alisa → agent loop ของเรา (ใช้ provider / OmniRoute เดิม)
+   └── engine: cli   → OpenCode / Claude Code / Codex / Gemini / … เป็น process จริง
+    ↓
+Review diff → comment ทีละบรรทัด → ส่งกลับ agent → merge branch ที่เลือก
+```
+
+### ทำไมต้องใช้ worktree
+
+agent ทุกตัวได้ checkout ของตัวเอง ทำให้:
+
+- รันพร้อมกันได้จริงโดยไม่แย่งไฟล์กัน (main repo ยังสะอาดเสมอ)
+- เทียบผลของหลายแนวทางก่อนเลือกของที่ดีที่สุด
+- ทิ้งทั้งก้อนได้ถ้าไม่พอใจ โดยไม่กระทบงานหลัก
+
+### ความปลอดภัยที่บังคับไว้
+
+- worktree ถูกสร้างนอกโฟลเดอร์โปรเจกต์เสมอ และ path ที่ client ส่งมาต้องผ่าน
+  `git worktree list` อีกชั้นก่อนถึงจะใช้ได้
+- branch name ถูก validate ตามกฎ ref ของ git และ prompt ไม่เคยถูกส่งผ่าน shell
+- merge จะ**ปฏิเสธ** ถ้า workspace หลักมี uncommitted change เพื่อไม่ให้ merge ไปปนกับงานที่ยังไม่เสร็จ
+- บน Windows การรัน `.cmd` shim ใช้ quoting ที่ควบคุมเอง และปฏิเสธ argument ที่ cmd.exe
+  จะตีความใหม่ (`%`, `!`, ขึ้นบรรทัดใหม่) แทนที่จริงเงียบ ๆ
+
+📘 รายละเอียดสถาปัตยกรรม, API และแผนงาน: **[docs/AGENT-ORCHESTRATOR.md](docs/AGENT-ORCHESTRATOR.md)**
 
 ---
 
@@ -341,9 +382,9 @@ CI ใช้ permission แบบ read-only เป็นค่าเริ่ม
 
 ```text
 src/
-├─ web/       Tauri webview UI + VS Code-style editor (internal only)
-├─ server/    local HTTP + WebSocket backend
-├─ core/      agent / context / compaction / security / snapshots
+├─ web/       Tauri webview UI + VS Code-style editor + orchestrator dashboard
+├─ server/    local HTTP + WebSocket backend, orchestrator, worktrees, CLI agents
+├─ core/      agent / context / compaction / security / snapshots / worktree + CLI catalog
 ├─ llm/       OpenAI-compatible streaming client
 └─ tools/     file / terminal / search / skill tools
 
@@ -368,15 +409,17 @@ V2 ที่ใช้งานได้แล้ว:
 - streaming tool activity, approval card, diff/changes panel และ rollback;
 - VS Code-style multi-tab editor พร้อม explorer, line numbers, breadcrumbs และ Ctrl/Cmd+S;
 - integrated terminal แบบ persistent สำหรับ local shell และ SSH พร้อม output batching เพื่อลดอาการกระตุก;
-- workspace instruction loading จาก `AGENTS.md` และ session persistence ต่อโปรเจกต์.
+- workspace instruction loading จาก `AGENTS.md` และ session persistence ต่อโปรเจกต์;
+- **agent orchestrator**: parallel worktrees, สอง engine (Alisa / external CLI), diff review พร้อม annotation และ merge กลับ branch หลัก.
 
 งานถัดไปที่ตั้งใจทำต่อ:
 
 - diagnostics, search/replace และ extension-like editor integrations;
-- Git worktree controls, commit/branch review และ local usage telemetry;
-- parallel read-only swarm workers ในอนาคต เมื่อ permission/context budget รองรับอย่างเสถียร.
+- mobile companion และ notification เมื่อ agent ทำงานเสร็จ;
+- local usage telemetry และ PTY เต็มรูปแบบสำหรับ interactive TUI ของ external CLI.
 
 รายละเอียด engineering roadmap: **[docs/CODEX-OMNIROUTE.md](docs/CODEX-OMNIROUTE.md)**
+และ **[docs/AGENT-ORCHESTRATOR.md](docs/AGENT-ORCHESTRATOR.md)**
 
 ---
 
