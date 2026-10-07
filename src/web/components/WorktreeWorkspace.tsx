@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
+  Cpu,
   FolderGit2,
   GitBranch,
   Loader2,
@@ -18,6 +19,7 @@ import { AgentTabBar, type AgentTab } from './workspace/AgentTabBar.tsx';
 import { AgentTerminalPane } from './workspace/AgentTerminalPane.tsx';
 import { AgentChatPane } from './workspace/AgentChatPane.tsx';
 import { WorktreeExplorer } from './workspace/WorktreeExplorer.tsx';
+import { SuperAgentView } from './workspace/SuperAgentView.tsx';
 
 export interface WorkspaceProject {
   path: string;
@@ -31,6 +33,9 @@ interface WorktreeWorkspaceProps {
   yoloMode: boolean;
   yoloSaving: boolean;
   onToggleYolo: () => void;
+  /** Session and model the Super Agent runs against. */
+  sessionId: string;
+  model: string;
   onClose: () => void;
   onNotice: (message: string) => void;
 }
@@ -61,7 +66,7 @@ async function postJson<T>(route: string, body: Record<string, unknown>): Promis
  * two can be compared side by side while the layout settles.
  */
 export function WorktreeWorkspace(props: WorktreeWorkspaceProps) {
-  const { yoloMode, yoloSaving, onToggleYolo, onClose, onNotice } = props;
+  const { yoloMode, yoloSaving, onToggleYolo, sessionId, model, onClose, onNotice } = props;
 
   const [projects, setProjects] = useState<WorkspaceProject[]>([]);
   const [repo, setRepo] = useState<WorktreeRepoInfo | null>(null);
@@ -75,6 +80,7 @@ export function WorktreeWorkspace(props: WorktreeWorkspaceProps) {
   const [error, setError] = useState('');
   const [creating, setCreating] = useState(false);
   const [newTitle, setNewTitle] = useState('');
+  const [superAgentOpen, setSuperAgentOpen] = useState(false);
 
   const sessionIdRef = useRef('');
 
@@ -201,6 +207,14 @@ export function WorktreeWorkspace(props: WorktreeWorkspaceProps) {
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-11 shrink-0 items-center gap-2 border-b border-white/[0.08] bg-[#11151d] px-3">
           <FolderGit2 className="h-4 w-4 shrink-0 text-pink-300" />
+          <button
+            type="button"
+            onClick={() => setSuperAgentOpen(true)}
+            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-pink-300/25 bg-pink-300/10 px-2 py-1 text-[11px] font-semibold text-pink-200 hover:bg-pink-300/20"
+            title="Super Agent — plans the work, delegates it to other agents, runs the checks, merges what passes"
+          >
+            <Cpu className="h-3 w-3" /> Super Agent
+          </button>
           <span className="min-w-0 truncate text-xs font-semibold text-slate-100">
             {activeTab?.title ?? 'Workspace'}
           </span>
@@ -311,6 +325,16 @@ export function WorktreeWorkspace(props: WorktreeWorkspaceProps) {
           </span>
         </footer>
       </div>
+
+      {superAgentOpen && (
+        <SuperAgentView
+          sessionId={sessionId}
+          model={model}
+          yoloMode={yoloMode}
+          onNotice={onNotice}
+          onClose={() => setSuperAgentOpen(false)}
+        />
+      )}
     </div>
   );
 }

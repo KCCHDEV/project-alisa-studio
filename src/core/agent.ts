@@ -5,7 +5,7 @@ import { ContextManager, estimateMessageTokens, type ActiveSkill } from './conte
 import { ContextCompactor } from './compactor.ts';
 import { loadProjectInstructions } from './instructions.ts';
 import { TaskSupervisor } from './supervisor.ts';
-import type { Goal, Message, AgentEvent, AgentMode, AgentStatus, ToolCall } from './types.ts';
+import type { Goal, Message, AgentEvent, AgentMode, AgentStatus, ToolCall, CoordinatorBridge } from './types.ts';
 
 export interface AgentOptions {
   cwd: string;
@@ -22,6 +22,12 @@ export interface AgentOptions {
   onGoalUpdate?: (goal: Goal | undefined) => void;
   requestApproval?: (action: string, details: Record<string, unknown>, signal: AbortSignal) => Promise<boolean>;
   onEvent?: (event: AgentEvent) => void;
+  /**
+   * Present only on the coordinator agent. It is handed to every tool
+   * execution context, which is what unlocks the delegation and verification
+   * tools. A worker agent leaves this unset and therefore cannot spawn agents.
+   */
+  coordinator?: CoordinatorBridge;
 }
 
 const isTestEnv = typeof process !== 'undefined' && (Boolean(process.env?.NODE_ENV === 'test') || Boolean(process.env?.BUN_TEST));
@@ -42,6 +48,7 @@ export class Agent {
   private goal?: Goal;
   private contextWindow: number;
   private onGoalUpdate?: AgentOptions['onGoalUpdate'];
+  private coordinator?: CoordinatorBridge;
   private lastResponseModel = '';
   private isAborted = false;
   private currentAbortController: AbortController | null = null;
@@ -67,6 +74,7 @@ export class Agent {
     this.goal = options.goal;
     this.contextWindow = Math.max(8_000, Math.round(options.contextWindow || 128_000));
     this.onGoalUpdate = options.onGoalUpdate;
+    this.coordinator = options.coordinator;
   }
 
   setStatus(status: AgentStatus, detail?: string) {
@@ -383,6 +391,7 @@ export class Agent {
               env: {},
               signal: this.currentAbortController.signal,
               emitEvent: (ev) => this.emit(ev),
+              coordinator: this.coordinator,
               goal: this.goal,
               updateGoal: (nextGoal) => {
                 this.goal = nextGoal;

@@ -16,6 +16,21 @@ interface AgentChatPaneProps {
   onChanged: () => void;
 }
 
+export interface SuperAgentWorker {
+  id: string;
+  worktreeId: string;
+  title: string;
+  engine: 'alisa' | 'cli';
+  cliAgentId?: string;
+  branch: string;
+  status: 'running' | 'done' | 'error' | 'cancelled';
+  detail: string;
+  changedFiles: number;
+  additions: number;
+  deletions: number;
+  durationMs?: number;
+}
+
 interface ChatLine {
   role: 'user' | 'agent' | 'system';
   text: string;

@@ -25,6 +25,8 @@ import { commitWorktree, mergeBranch, runGit, worktreeFileDiffs } from './worktr
 import { CliAgentRunner } from './cli-agent-sessions.ts';
 import { detectCliAgents, requireCliAgent } from '../core/cli-agents.ts';
 import { AnnotationStore, formatAnnotationsForAgent } from './annotations.ts';
+import { CoordinatorService } from './coordinator-service.ts';
+import { runSuperAgent } from '../core/super-agent.ts';
 
 const PORT = Number(process.env.PORT || 3101);
 const RUNTIME_DIR = process.env.ALISA_CONFIG_DIR || process.cwd();
@@ -1151,6 +1153,41 @@ const server = http.createServer(async (req, res) => {
     }
     return;
   }
+  if (url.pathname === '/api/coordinator' && req.method === 'GET') {
+    try {
+      const agents = await detectCliAgents({ cwd: currentConfig.workspaceDir, includeVersions: false, verifyYolo: false });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        workers: coordinatorService.listWorkers(),
+        capacity: orchestrator.capacity,
+        activeRuns: orchestrator.activeCount,
+        yoloMode: currentConfig.yoloMode === true,
+        cliAgents: agents.filter(agent => agent.installed).map(agent => ({ id: agent.id, label: agent.label })),
+      }));
+    } catch (err: any) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message || 'Unable to read coordinator state' }));
+    }
+    return;
+  }
+  if (url.pathname === '/api/coordinator/verify' && req.method === 'POST') {
+    try {
+      let body = '';
+      for await (const chunk of req) { body += chunk; if (body.length > 32000) throw new Error('Verify request is too large'); }
+      const data = z.object({
+        worktreeId: z.string().trim().min(1).max(120).optional(),
+        includeBuild: z.boolean().optional(),
+        timeoutMs: z.number().int().min(5000).max(1800000).optional(),
+      }).parse(JSON.parse(body || '{}'));
+      const report = await coordinatorService.verify(data);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(report));
+    } catch (err: any) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message || 'Unable to run verification' }));
+    }
+    return;
+  }
   if (url.pathname === '/api/cli-agents' && req.method === 'GET') {
     try {
       const includeVersions = url.searchParams.get('versions') !== '0';
@@ -1549,6 +1586,23 @@ const worktrees = new WorktreeRegistry({ runtimeDir: RUNTIME_DIR });
 
 /** Reviewer comments pinned to diff lines. */
 const annotationsStore = new AnnotationStore(RUNTIME_DIR);
+
+/**
+ * Coordinator events are pushed to every socket.
+ *
+ * Workers started by the coordinator run on their own sockets' broadcasts, so
+ * their events already reach the UI. This fan-out only covers the
+ * coordinator-specific bookkeeping (worker started/updated/merged, verification
+ * results), which the sockets know nothing about.
+ */
+const coordinatorListeners = new Set<(event: Record<string, any>) => void>();
+
+function broadcastCoordinator(event: unknown) {
+  if (!event || typeof event !== 'object') return;
+  for (const listener of [...coordinatorListeners]) {
+    try { listener(event as Record<string, any>); } catch { /* A bad listener must not break a run. */ }
+  }
+}
 
 /** Pending approval prompts, shared by every run so a reply can arrive on any socket. */
 const approvalResolvers = new Map<string, (approved: boolean) => void>();
@@ -1950,6 +2004,77 @@ function truncatedLabel(truncated: boolean, fallback: string): string {
   return truncated ? `${fallback} (output truncated)` : fallback;
 }
 
+/**
+ * The Super Agent.
+ *
+ * One agent whose tools include delegating work to other agents and running the
+ * project's checks. All git and process knowledge stays in `CoordinatorService`.
+ */
+const coordinatorService = new CoordinatorService({
+  resolveWorkspace: () => currentConfig.workspaceDir,
+  worktrees,
+  startWorker: request => {
+    const workspace = currentConfig.workspaceDir;
+    const cwd = worktrees.get(request.worktreeId)?.path ?? workspace;
+    const model = request.model?.trim() || currentConfig.model;
+    const { run, finished } = orchestrator.start({
+      workspace,
+      cwd,
+      sessionId: `worker:${request.worktreeId}`,
+      prompt: request.prompt,
+      model,
+      mode: 'code',
+      engine: request.engine,
+      label: request.title,
+      worktreeId: request.worktreeId,
+      swarm: false,
+      runner: context => (request.engine === 'cli'
+        ? executeCliTask({
+          runId: context.runId,
+          signal: context.signal,
+          workspace,
+          cwd,
+          sessionId: `worker:${request.worktreeId}`,
+          prompt: request.prompt,
+          agentId: request.cliAgentId ?? '',
+          model: request.model,
+          broadcast: () => undefined,
+        })
+        : executeSessionTask({
+          runId: context.runId,
+          signal: context.signal,
+          workspace,
+          cwd,
+          sessionId: `worker:${request.worktreeId}`,
+          prompt: request.prompt,
+          mode: 'code',
+          model,
+          swarm: false,
+          skills: [],
+          maxSupervisorRounds: 0,
+          broadcast: () => undefined,
+        })),
+    });
+    return { runId: run.id, finished: finished.then(() => undefined) };
+  },
+  inspectRun: runId => {
+    const snapshot = orchestrator.snapshot(runId);
+    if (!snapshot) return undefined;
+    const status = snapshot.status === 'done' ? 'done'
+      : snapshot.status === 'error' ? 'error'
+        : snapshot.status === 'cancelled' ? 'cancelled'
+          : 'running';
+    return { status, detail: snapshot.detail, startedAt: snapshot.startedAt, completedAt: snapshot.completedAt };
+  },
+  // The worker transcript lives in the shared session store; the coordinator only
+  // needs the last thing the worker said about itself.
+  readRunSummary: runId => {
+    const snapshot = orchestrator.recent(40).find(entry => entry.id === runId);
+    return snapshot?.detail ?? '';
+  },
+  onEvent: event => broadcastCoordinator(event),
+});
+
 // WebSocket Server
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 1024 * 1024, verifyClient: ({ origin, req }: { origin: string; req: http.IncomingMessage }) => (!origin || trustedOrigins.has(origin)) && trustedHost(req.headers.host) });
 
@@ -1978,6 +2103,7 @@ wss.on('connection', (ws: WebSocket) => {
   };
   // Runs outlive the socket, so every connected view sees orchestrator activity.
   const detachOrchestrator = orchestrator.attach(event => broadcast(event as Record<string, any>));
+  coordinatorListeners.add(broadcast);
   ws.on('message', async (data) => {
     let msg: any;
     try {
@@ -2038,7 +2164,89 @@ wss.on('connection', (ws: WebSocket) => {
         terminalSessions.stop(msg.sessionId);
         return;
       }
-if (msg.type !== 'start_task') return;
+if (msg.type === 'super_agent_start') {
+        if (typeof msg.goal !== 'string' || !msg.goal.trim()) throw new Error('A goal is required to start the Super Agent');
+        if (orchestrator.isWorkspaceBusy(currentConfig.workspaceDir)) throw new Error('A task is already running in this workspace');
+        const goal = msg.goal.trim();
+        const workspace = currentConfig.workspaceDir;
+        const session = sessions.get(workspace, msg.sessionId);
+        const useYolo = currentConfig.yoloMode === true;
+        const contextWindow = contextWindowForModel(currentConfig.activeProviderId, currentConfig.model);
+        const startedAt = Date.now();
+        let taskState: TaskStateEvent = {
+          type: 'task_state',
+          sessionId: session.id,
+          status: 'thinking',
+          detail: 'Starting the Super Agent',
+          model: currentConfig.model,
+          mode: 'code',
+          startedAt,
+          yolo: useYolo,
+          swarm: false,
+        };
+        activeTaskStates.set('super', { workspace, state: taskState });
+        broadcast({ ...taskState, runId: 'super' });
+
+        const { run, finished } = orchestrator.start({
+          workspace,
+          cwd: workspace,
+          sessionId: session.id,
+          prompt: goal,
+          model: currentConfig.model,
+          mode: 'code',
+          engine: 'alisa',
+          label: 'Super Agent',
+          swarm: false,
+          exclusiveWorkspace: true,
+          runner: async context => {
+            const agents = await detectCliAgents({ cwd: workspace, includeVersions: false, verifyYolo: false });
+            const result = await runSuperAgent({
+              cwd: workspace,
+              sessionId: session.id,
+              goal,
+              coordinator: coordinatorService,
+              workspace,
+              maxParallel: orchestrator.capacity,
+              cliAgents: agents.filter(agent => agent.installed).map(agent => ({ id: agent.id, label: agent.label })),
+              autoApprove: useYolo,
+              llmConfig: { ...currentConfig, model: currentConfig.model },
+              contextWindow,
+              maxIterations: typeof msg.maxIterations === 'number' ? msg.maxIterations : 80,
+              sessionGoal: session.goal,
+              onEvent: event => {
+                if (event.type === 'status_change') {
+                  taskState = { ...taskState, status: event.status, detail: event.detail || taskState.detail };
+                  activeTaskStates.set('super', { workspace, state: taskState });
+                }
+                broadcast({ ...event, runId: 'super' });
+              },
+            });
+
+            const durationMs = Math.max(0, Date.now() - startedAt);
+            const completedAt = Date.now();
+            const status: AgentStatus = result.status === 'done' ? 'done' : result.status === 'cancelled' ? 'idle' : 'error';
+            const detail = result.status === 'done'
+              ? `Super Agent finished after ${result.workersStarted} worker${result.workersStarted === 1 ? '' : 's'}`
+              : result.detail;
+
+            for (const message of result.messages) {
+              if (message.role === 'user') continue;
+              session.messages.push(message);
+            }
+            session.lastRun = { status, detail, durationMs, completedAt };
+            sessions.save(session);
+            activeTaskStates.delete('super');
+            broadcast({ type: 'session_saved', sessionId: session.id, status, detail, durationMs, completedAt });
+            void context.update(result.status === 'done' ? 'done' : result.status === 'cancelled' ? 'cancelled' : 'error', detail);
+            return { status: result.status === 'done' ? 'done' : result.status === 'cancelled' ? 'cancelled' : 'error', detail };
+          },
+        });
+        activeRunId = run.id;
+        finished.then(() => { if (activeRunId === run.id) activeRunId = undefined; },
+          () => { if (activeRunId === run.id) activeRunId = undefined; });
+        return;
+      }
+      if (msg.type !== 'start_task') return;
       if (typeof msg.prompt !== 'string' || !msg.prompt.trim()) throw new Error('Prompt is required');
       const workspace = currentConfig.workspaceDir;
       const session = sessions.get(workspace, msg.sessionId);
@@ -2122,6 +2330,7 @@ if (msg.type !== 'start_task') return;
   ws.on('close', () => {
     terminalSessions.disposeAll();
     detachOrchestrator();
+    coordinatorListeners.delete(broadcast);
     // Runs deliberately outlive the socket so an agent keeps working when the UI
     // reloads; the dashboard reattaches to the orchestrator on reconnect.
   });

@@ -102,6 +102,98 @@ export interface ExecutionContext {
   requestApproval?: (action: string, details: Record<string, any>) => Promise<boolean>;
   goal?: Goal;
   updateGoal?: (goal: Goal | undefined) => void;
+  /**
+   * Present only for the coordinator agent. Its presence is what unlocks the
+   * delegation and verification tools, so an ordinary worker can never spawn
+   * other agents.
+   */
+  coordinator?: CoordinatorBridge;
+}
+
+/**
+ * The slice of the orchestrator a coordinator agent is allowed to touch.
+ *
+ * Keeping this an interface rather than importing the registries directly is
+ * what lets the coordinator be tested without a live server, and keeps the tool
+ * surface narrow enough to reason about.
+ */
+export interface CoordinatorBridge {
+  listWorkers(): WorkerHandle[];
+  delegate(request: DelegateRequest): Promise<WorkerHandle>;
+  getWorker(id: string): WorkerHandle | undefined;
+  collectWorker(id: string): Promise<WorkerReport>;
+  mergeWorker(request: MergeRequest): Promise<MergeReport>;
+  removeWorker(id: string, deleteBranch: boolean): Promise<void>;
+  verify(request: VerifyRequest): Promise<VerifyReport>;
+  stopAll(): number;
+}
+
+export interface DelegateRequest {
+  title: string;
+  prompt: string;
+  engine: 'alisa' | 'cli';
+  cliAgentId?: string;
+  model?: string;
+  /** Reuse an existing worktree instead of creating one. */
+  reuseWorktreeId?: string;
+}
+
+export interface WorkerHandle {
+  id: string;
+  worktreeId: string;
+  title: string;
+  engine: 'alisa' | 'cli';
+  cliAgentId?: string;
+  branch: string;
+  status: 'running' | 'done' | 'error' | 'cancelled';
+  detail: string;
+  startedAt: number;
+  completedAt?: number;
+  durationMs?: number;
+  changedFiles: number;
+  additions: number;
+  deletions: number;
+}
+
+export interface WorkerReport {
+  id: string;
+  title: string;
+  status: WorkerHandle['status'];
+  detail: string;
+  branch: string;
+  summary: string;
+  changedFiles: string[];
+}
+
+export interface MergeRequest {
+  id: string;
+  message?: string;
+  /** Stage and commit outstanding changes before merging. */
+  commitMessage?: string;
+}
+
+export interface MergeReport {
+  merged: boolean;
+  alreadyUpToDate: boolean;
+  conflicted: boolean;
+  message: string;
+  branch: string;
+}
+
+export interface VerifyRequest {
+  /** Verification runs here: a worktree, or the main workspace. */
+  worktreeId?: string;
+  includeBuild?: boolean;
+  timeoutMs?: number;
+}
+
+export interface VerifyReport {
+  worktreeId: string;
+  passed: boolean;
+  /** Compact per-command verdicts, already trimmed for a prompt. */
+  checks: Array<{ kind: string; passed: boolean; summary: string }>;
+  overall: string;
+  failures: string[];
 }
 
 export type AgentStatus = 'idle' | 'thinking' | 'acting' | 'waiting_approval' | 'self_correcting' | 'error' | 'done';

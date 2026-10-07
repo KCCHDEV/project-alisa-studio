@@ -2485,6 +2485,8 @@ export default function AppV2() {
           yoloMode={yoloMode}
           yoloSaving={yoloSaving}
           onToggleYolo={() => void toggleYolo()}
+          sessionId={sessionId}
+          model={model}
           onClose={() => setWorktreeMode(false)}
           onNotice={message => { setWorktreeNotice(message); setTimeout(() => setWorktreeNotice(''), 4000); }}
         />
