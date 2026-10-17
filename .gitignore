@@ -57,3 +57,27 @@ opencode.json
 # Orchestrator worktrees live outside the repo, but keep the path ignored in
 # case a custom worktree root is ever pointed inside it
 .alisa-worktrees/
+
+# Local-only files excluded from workspace publication
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+node_modules/
+.next*/
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.db
+*.sqlite*
+*.pem
+*.pfx
+*.key
+*.dpapi
+*.log
+*.tsbuildinfo
+.session/
+.private/
+.local/
